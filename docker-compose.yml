@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  vpn_bot:
+    build: .
+    container_name: vpn_bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
