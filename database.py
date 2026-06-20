@@ -1221,18 +1221,19 @@ async def get_all_subscriptions(user_id: int) -> list[dict]:
 async def get_subscription_display_map(user_id: int) -> dict[int, int]:
     """
     Returns a per-user stable numbering map: {subscription_id: display_number}.
-    Numbering is local to the user and ordered from oldest to newest subscription.
+    Numbering is local to the user and ordered from oldest to newest ACTIVE subscription.
     """
+    now_iso = _utcnow_iso()
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """
             SELECT id
             FROM subscriptions
-            WHERE user_id = ?
+            WHERE user_id = ? AND is_active = 1 AND expires_at > ?
             ORDER BY started_at ASC, id ASC
             """,
-            (user_id,),
+            (user_id, now_iso),
         ) as cur:
             rows = await cur.fetchall()
     return {int(row["id"]): idx for idx, row in enumerate(rows, start=1)}
@@ -1280,6 +1281,23 @@ async def get_expired_subscriptions() -> list[dict]:
             WHERE s.is_active = 1 AND s.expires_at <= ?
             """,
             (now_iso,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+
+async def get_old_expired_subscriptions(days_after_expiry: int = 2) -> list[dict]:
+    threshold = (_utcnow() - timedelta(days=days_after_expiry)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.*, u.tg_id
+            FROM subscriptions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.is_active = 1 AND s.expires_at <= ?
+            """,
+            (threshold,),
         ) as cur:
             rows = await cur.fetchall()
             return [dict(row) for row in rows]

@@ -4,6 +4,7 @@ Payment handlers: create YooKassa payments, verify them, and fulfill orders.
 from __future__ import annotations
 
 import logging
+import html
 import math
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
@@ -296,6 +297,7 @@ async def _create_new_subscription(payment: dict, bonus_days: int) -> dict | Non
         "flow": "new",
         "previous_devices": None,
         "bonus_days": bonus_days,
+        "xui_created": created,
     }
 
 
@@ -388,6 +390,7 @@ async def _renew_existing_subscription(payment: dict, bonus_days: int) -> dict |
         "flow": "renew",
         "previous_devices": old_devices,
         "bonus_days": bonus_days,
+        "xui_created": replacement,
     }
 
 
@@ -420,6 +423,8 @@ async def _notify_success(bot: Bot, db_user: dict, payment: dict, result: dict) 
         ),
         disable_web_page_preview=True,
     )
+
+
 
 
 async def _process_successful_payment(bot: Bot, db_user: dict, payment_id: int) -> bool:

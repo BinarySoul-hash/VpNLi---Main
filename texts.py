@@ -11,6 +11,7 @@ from config import (
     REFERRAL_BONUS_DAYS_BY_MONTHS,
     TRIAL_DAYS,
     TRIAL_TRAFFIC_GB,
+    XUI_INBOUND_IDS,
 )
 
 CHANNEL_URL = "https://t.me/VpNLi_Hab"
@@ -40,6 +41,8 @@ def _days_label(days_left: int) -> str:
     if 2 <= days_left % 10 <= 4 and not (12 <= days_left % 100 <= 14):
         return f"{days_left} дня"
     return f"{days_left} дней"
+
+
 def _period_price_line(devices: int, months: int) -> str:
     price = PRICES[devices][months]
     per_month = price / months
@@ -582,11 +585,13 @@ def link_limit_reached(devices: int, reveals_now: int, online_ips: int) -> str:
 
 def subscription_reissued(sub: dict) -> str:
     return (
-        "♻️ <b>Ссылка перевыпущена</b>\n"
-        "Старая ссылка и старые подключения больше неактивны.\n"
+        "♻️ <b>Ссылка перевыпущена</b>\n\n"
+        "Старая ссылка и старые подключения больше неактивны.\n\n"
         "Импортируйте новый адрес в приложение и подключайтесь заново.\n\n"
-        f"{subscription_info(sub)}"
+        f"Ссылка:\n<code>{html.escape(sub.get('subscription_url', ''))}</code>\n\n"
+        "Нажмите на ссылку, чтобы скопировать."
     )
+
 
 
 def device_limit_exceeded(sub: dict, online_ips: int, cooldown_seconds: int) -> str:

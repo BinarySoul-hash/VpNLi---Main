@@ -274,7 +274,7 @@ async def _ensure_subscription_link(sub: dict) -> dict | None:
         for client in old_clients:
             cid = client.get("xui_client_id")
             if cid:
-                await xui.delete_client(cid)
+                await xui.delete_client(cid, email=client.get("email"))
                 await db.deactivate_vpn_client(cid)
     except Exception:
         logger.exception("Failed to cleanup legacy vpn_clients for sub %s", sub["id"])
@@ -457,8 +457,8 @@ async def renew_pick(
         await call.answer("Некорректная подписка.", show_alert=True)
         return
     sub = await db.get_subscription_by_id(sub_id)
-    if not sub or sub["user_id"] != db_user["id"] or not sub["is_active"]:
-        await call.answer("Подписка не найдена или уже неактивна.", show_alert=True)
+    if not sub or sub["user_id"] != db_user["id"]:
+        await call.answer("Подписка не найдена.", show_alert=True)
         return
     sub = await _attach_display_number(db_user["id"], sub)
     if sub.get("months") == 0:
@@ -492,8 +492,8 @@ async def _start_renew_same_flow(
         await call.answer("Некорректная подписка.", show_alert=True)
         return
     sub = await db.get_subscription_by_id(sub_id)
-    if not sub or sub["user_id"] != db_user["id"] or not sub["is_active"]:
-        await call.answer("Подписка не найдена или уже неактивна.", show_alert=True)
+    if not sub or sub["user_id"] != db_user["id"]:
+        await call.answer("Подписка не найдена.", show_alert=True)
         return
     sub = await _attach_display_number(db_user["id"], sub)
     if sub.get("months") == 0:
@@ -582,8 +582,8 @@ async def renew_change(
         await call.answer("Некорректная подписка.", show_alert=True)
         return
     sub = await db.get_subscription_by_id(sub_id)
-    if not sub or sub["user_id"] != db_user["id"] or not sub["is_active"]:
-        await call.answer("Подписка не найдена или уже неактивна.", show_alert=True)
+    if not sub or sub["user_id"] != db_user["id"]:
+        await call.answer("Подписка не найдена.", show_alert=True)
         return
     if sub.get("months") == 0:
         await call.answer("Пробный доступ продлить нельзя. Оформите новую подписку.", show_alert=True)
@@ -891,6 +891,7 @@ async def my_subscriptions(call: CallbackQuery, db_user: dict | None = None) -> 
         return
 
     subs = await db.get_all_subscriptions(db_user["id"])
+    subs = [s for s in subs if s.get("is_active")]
     subs = await _attach_display_numbers(db_user["id"], subs)
     await call.answer()
     if not subs:
@@ -934,9 +935,20 @@ async def subscription_detail(call: CallbackQuery, db_user: dict | None = None) 
     expires_at = datetime.fromisoformat(sub["expires_at"])
     is_expired = (expires_at <= datetime.utcnow()) or (not sub["is_active"])
 
+    extra_text = ""
+    if sub["is_active"] and sub.get("email"):
+        try:
+            vless_keys = await xui.get_client_vless_keys(email=sub["email"])
+        except Exception:
+            logger.exception("Failed to load multi-node subscription keys for sub %s", sub_id)
+
+    message_text = texts.subscription_info(sub, online_ips=online_ips, active_clients=len(active_clients))
+    if extra_text:
+        message_text += "\n\n" + extra_text
+
     await call.answer()
     await call.message.edit_text(
-        texts.subscription_info(sub, online_ips=online_ips, active_clients=len(active_clients)),
+        message_text,
         reply_markup=kb.subscription_detail_kb(sub_id, bool(sub["is_active"]), is_expired=is_expired),
     )
 
@@ -988,13 +1000,26 @@ async def get_link(call: CallbackQuery, db_user: dict | None = None) -> None:
     if ready_sub.get("email"):
         online_ips = await xui.get_online_ips_count(ready_sub["email"])
 
-    await call.message.edit_text(
+    extra_text = ""
+    if ready_sub.get("email"):
+        try:
+            vless_keys = await xui.get_client_vless_keys(email=ready_sub["email"])
+        except Exception:
+            logger.exception("Failed to load multi-node subscription keys for get_link %s", sub_id)
+
+    message_text = (
         "🔗 <b>Ссылка готова</b>\n\n"
         f"📡 Подписка №<b>{ready_sub['display_no']}</b>\n"
         f"📶 Онлайн сейчас: <b>{online_ips}/{ready_sub['devices']}</b>\n"
         "Ссылка:\n"
         f"<code>{html.escape(ready_sub['subscription_url'])}</code>\n\n"
-        "Нажмите на ссылку, чтобы её скопировать.",
+        "Нажмите на ссылку, чтобы её скопировать."
+    )
+    if extra_text:
+        message_text += "\n\n" + extra_text
+
+    await call.message.edit_text(
+        message_text,
         reply_markup=kb.back_to_sub_kb(sub_id),
         disable_web_page_preview=True,
     )
@@ -1057,7 +1082,7 @@ async def deactivate_client(call: CallbackQuery, db_user: dict | None = None) ->
 
     await db.deactivate_vpn_client(client["xui_client_id"])
     if await xui.login():
-        await xui.delete_client(client["xui_client_id"])
+        await xui.delete_client(client["xui_client_id"], email=client.get("email"))
 
     await call.answer("Ссылка отключена.")
     await call.message.edit_text(
@@ -1120,8 +1145,13 @@ async def reset_reveals(call: CallbackQuery, db_user: dict | None = None) -> Non
         return
 
     await call.message.edit_text(
-        texts.subscription_reissued(updated_sub),
-        reply_markup=kb.subscription_detail_kb(sub_id, bool(updated_sub["is_active"])),
+        "♻️ <b>Ссылка перевыпущена</b>\n\n"
+        "Старая ссылка и старые подключения больше неактивны.\n\n"
+        "Импортируйте новый адрес в приложение и подключайтесь заново.\n\n"
+        f"Ссылка:\n<code>{html.escape(updated_sub['subscription_url'])}</code>\n\n"
+        "Нажмите на ссылку, чтобы скопировать.",
+        reply_markup=kb.after_reissue_kb(sub_id),
+        disable_web_page_preview=True,
     )
 
 
@@ -1136,8 +1166,8 @@ async def legacy_renew_alias(call: CallbackQuery, db_user: dict | None = None) -
         return
 
     sub = await db.get_subscription_by_id(int(parts[1]))
-    if not sub or sub["user_id"] != db_user["id"] or not sub["is_active"]:
-        await call.answer("Подписка не найдена или уже неактивна.", show_alert=True)
+    if not sub or sub["user_id"] != db_user["id"]:
+        await call.answer("Подписка не найдена.", show_alert=True)
         return
 
     await call.answer()

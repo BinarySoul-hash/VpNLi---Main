@@ -44,7 +44,11 @@ async def ip_limit_enforcer_loop(bot: Bot, interval: int = 120) -> None:
                 if HARD_IP_LIMIT_ENFORCEMENT:
                     until = cooldown_until.get(email)
                     if until and now_ts >= until:
-                        if await xui.enable_client(sub["inbound_id"], email):
+                        re_enabled = False
+                        for target_id in xui.get_all_inbound_ids():
+                            if await xui.enable_client(target_id, email):
+                                re_enabled = True
+                        if re_enabled:
                             cooldown_until.pop(email, None)
                             logger.info("IP enforcer: re-enabled %s after cooldown", email)
 
@@ -69,7 +73,11 @@ async def ip_limit_enforcer_loop(bot: Bot, interval: int = 120) -> None:
                 await db.log_violation(sub["id"], sub["user_id"], email, count, limit)
 
                 if HARD_IP_LIMIT_ENFORCEMENT and email not in cooldown_until:
-                    if await xui.disable_client(sub["inbound_id"], email):
+                    disabled = False
+                    for target_id in xui.get_all_inbound_ids():
+                        if await xui.disable_client(target_id, email):
+                            disabled = True
+                    if disabled:
                         try:
                             await xui.clear_client_ips(email)
                         except Exception:

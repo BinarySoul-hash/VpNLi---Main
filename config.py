@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -12,6 +13,34 @@ def _env_bool(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _env_int_list(name: str, default: list[int]) -> list[int]:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    result: list[int] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            result.append(int(item))
+        except ValueError:
+            continue
+    return result or default
+
+
+def _env_int(name: str, default: int = 1) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        values = _env_int_list(name, [])
+        return values[0] if values else default
+
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS: list[int] = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
@@ -22,13 +51,21 @@ YOOKASSA_SECRET_KEY: str = os.getenv("YOOKASSA_SECRET_KEY", "")
 YOOKASSA_RETURN_URL: str = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/")
 
 # ── 3X-UI Panel ───────────────────────────────────────────────────────────────
-XUI_HOST: str = os.getenv("XUI_HOST", "https://localhost:2053")
+_raw_xui_host = os.getenv("XUI_HOST", "https://localhost:2053").rstrip("/")
+parsed_xui = urlparse(_raw_xui_host)
+if parsed_xui.path and parsed_xui.path != "/":
+    XUI_HOST: str = f"{parsed_xui.scheme}://{parsed_xui.netloc}"
+    XUI_PATH_PREFIX: str = parsed_xui.path.rstrip("/")
+else:
+    XUI_HOST: str = _raw_xui_host
+    XUI_PATH_PREFIX: str = os.getenv("XUI_PATH_PREFIX", "").rstrip("/")
 # Optional: if your panel is behind a reverse proxy with a custom path prefix,
 # this will be prepended to all API endpoints (e.g., "/d8pj23YOnuHR558ajb")
-XUI_PATH_PREFIX: str = os.getenv("XUI_PATH_PREFIX", "").rstrip("/")
 XUI_USERNAME: str = os.getenv("XUI_USERNAME", "admin")
 XUI_PASSWORD: str = os.getenv("XUI_PASSWORD", "admin")
-XUI_INBOUND_ID: int = int(os.getenv("XUI_INBOUND_ID", "1"))
+XUI_API_TOKEN: str = os.getenv("XUI_API_TOKEN", "").strip()
+XUI_INBOUND_ID: int = _env_int("XUI_INBOUND_ID", 1)
+XUI_INBOUND_IDS: list[int] = _env_int_list("XUI_INBOUND_IDS", _env_int_list("XUI_INBOUND_ID", [XUI_INBOUND_ID]))
 XUI_VERIFY_SSL: bool = _env_bool("XUI_VERIFY_SSL", True)
 XUI_PUBLIC_BASE_URL: str = os.getenv("XUI_PUBLIC_BASE_URL", "").rstrip("/")
 XUI_SUBSCRIPTION_URL_TEMPLATE: str = os.getenv("XUI_SUBSCRIPTION_URL_TEMPLATE", "").strip()
@@ -106,3 +143,6 @@ PRIVACY_PDF_PATH: str = os.getenv(
 
 # Название соединения в VLESS-ссылке (часть после #).
 VLESS_KEY_NAME: str = os.getenv("VLESS_KEY_NAME", INBOUND_REMARK)
+
+# Model for the AI/bot integrations (name passed to provider). Change via env var `MODEL_NAME`.
+MODEL_NAME: str = os.getenv("MODEL_NAME", "gpt-5-mini")

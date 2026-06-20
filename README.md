@@ -59,7 +59,9 @@ YOOKASSA_RETURN_URL=https://t.me/ВАШ_БОТ
 XUI_HOST=https://IP_СЕРВЕРА:2053
 XUI_USERNAME=admin
 XUI_PASSWORD=ваш_пароль
+XUI_API_TOKEN=      # Рекомендуется для 3x-ui v3.x: Settings → API Tokens
 XUI_INBOUND_ID=1
+XUI_INBOUND_IDS=1,2 # Inbound'ы двух серверов/узлов, которые должны попасть в одну подписку
 XUI_VERIFY_SSL=true
 XUI_PUBLIC_BASE_URL=
 XUI_SUBSCRIPTION_URL_TEMPLATE=
@@ -115,6 +117,8 @@ Port:       443
 
 8. Запомните ID inbound (цифра слева от названия) — это `XUI_INBOUND_ID` в `.env`
 
+Для 3x-ui v3.3.0 и новее рекомендуется создать API token в панели и указать его в `XUI_API_TOKEN`. Если используется схема с двумя серверами через узлы, укажите оба inbound ID в `XUI_INBOUND_IDS`, например `1,2`. Бот создаст одного клиента с одним `subId` сразу на обоих inbound'ах, поэтому подписочная ссылка будет показывать оба сервера.
+
 ### Шаг 3: Открыть порт в файрволе
 
 ```bash
@@ -130,6 +134,8 @@ ufw reload
 ```env
 XUI_HOST=https://IP_VPN_СЕРВЕРА:2053
 XUI_INBOUND_ID=1   # ID вашего inbound
+XUI_INBOUND_IDS=1,2 # ID inbound'ов на двух серверах/узлах
+XUI_API_TOKEN=ваш_api_token
 XUI_VERIFY_SSL=true
 ```
 

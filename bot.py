@@ -25,7 +25,7 @@ from services.xui import xui
 import database as db
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stdout,
 )
@@ -72,6 +72,23 @@ async def main() -> None:
     # Enforcer runs every 2 minutes to minimize server load
     enforcer_task = asyncio.create_task(ip_limit_enforcer_loop(bot, interval=120))
     logger.info("IP limit enforcer started (interval: 120s)")
+
+    # Wait for network before starting polling
+    for attempt in range(1, 11):
+        try:
+            await bot.get_me()
+            logger.info("Telegram API connection OK")
+            break
+        except Exception as exc:
+            if attempt >= 10:
+                logger.critical("Cannot reach Telegram API after %d attempts, giving up", attempt)
+                raise
+            delay = min(2 ** attempt, 30.0)
+            logger.warning(
+                "Telegram API unreachable on startup, retrying in %.0fs (%d/10): %s",
+                delay, attempt, exc,
+            )
+            await asyncio.sleep(delay)
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())

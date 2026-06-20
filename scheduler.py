@@ -23,7 +23,7 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
     @scheduler.scheduled_job("interval", hours=6, id="check_expiring")
     async def notify_expiring() -> None:
         logger.info("Scheduler: checking expiring subscriptions")
-        for threshold in (3, 1):
+        for threshold in (7, 3, 1):
             expiring = await db.get_expiring_subscriptions(days=threshold)
             for record in expiring:
                 try:
@@ -56,12 +56,25 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
         for record in expired:
             try:
                 if record.get("xui_client_id"):
-                    await xui.del_client(record["inbound_id"], record["xui_client_id"])
+                    for target_id in xui.get_all_inbound_ids():
+                        try:
+                            await xui.del_client(target_id, record["xui_client_id"])
+                        except Exception:
+                            logger.exception(
+                                "Scheduler: failed to delete client on inbound %s for sub %s",
+                                target_id,
+                                record["id"],
+                            )
 
                 for client in await db.get_active_vpn_clients_for_subscription(record["id"]):
-                    await xui.delete_client(client["xui_client_id"])
+                    await xui.delete_client(client["xui_client_id"], email=client.get("email"))
                     await db.deactivate_vpn_client(client["xui_client_id"])
+            except Exception:
+                logger.exception("Scheduler: failed to cleanup xui for subscription %s", record["id"])
 
+        old_expired = await db.get_old_expired_subscriptions(days_after_expiry=2)
+        for record in old_expired:
+            try:
                 await db.deactivate_subscription(record["id"])
 
                 try:
@@ -73,7 +86,7 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
                 except Exception:
                     logger.exception("Scheduler: failed to send expiration notice to %s", record["tg_id"])
             except Exception:
-                logger.exception("Scheduler: failed to cleanup subscription %s", record["id"])
+                logger.exception("Scheduler: failed to deactivate subscription %s", record["id"])
 
     @scheduler.scheduled_job("cron", hour=23, minute=59, id="db_backup_msk")
     async def daily_db_backup() -> None:

@@ -9,6 +9,7 @@ import aiosqlite
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.types import InlineKeyboardButton
+from aiogram.enums import ButtonStyle
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -29,7 +30,9 @@ def is_admin(tg_id: int) -> bool:
 
 class AdminState(StatesGroup):
     waiting_broadcast = State()
-    waiting_broadcast_buttons = State()
+    waiting_broadcast_text = State()
+    waiting_broadcast_btn_label = State()
+    waiting_broadcast_btn_action = State()
     waiting_user_query = State()
     waiting_promo_code = State()
     waiting_promo_discount = State()
@@ -62,8 +65,8 @@ async def cmd_admin(message: Message):
     if not is_admin(message.from_user.id):
         return
     await message.answer(
-        "🛠 <b>Панель администратора</b>\n\n"
-        "Выберите действие: аналитика, рассылка, промокоды или поиск пользователя.",
+        "🛠 <b>VpNLi Admin</b>\n\n"
+        "Статистика, рассылки, промокоды, пользователи — всё здесь.",
         reply_markup=kb.admin_menu_kb(),
     )
 
@@ -79,30 +82,41 @@ async def adm_stats(call: CallbackQuery):
     users = await db.get_users_count()
     revenue = await db.get_revenue_stats()
 
-    # Считаем активные подписки эффективнее — через одну сводку
     all_users = await db.get_all_users()
     active_subs = 0
     trial_users = 0
+    paid_users = 0
     for u in all_users:
         subs = await db.get_active_subscriptions(u["id"])
         active_subs += len(subs)
         if u.get("trial_used") and not await db.has_paid_before(u["id"]):
             trial_users += 1
+        if await db.has_paid_before(u["id"]):
+            paid_users += 1
 
-    # Новые юзеры за последние 7 дней
     new_week = sum(
         1 for u in all_users
         if (datetime.utcnow() - datetime.fromisoformat(u["created_at"])).days <= 7
     )
+    new_day = sum(
+        1 for u in all_users
+        if (datetime.utcnow() - datetime.fromisoformat(u["created_at"])).days < 1
+    )
+
+    conversion = f"{paid_users / users * 100:.1f}%" if users > 0 else "0%"
 
     text = (
-        "📊 <b>Статистика сервиса</b>\n\n"
-        f"👥 Всего пользователей: <b>{users}</b>\n"
-        f"🆕 За последние 7 дней: <b>+{new_week}</b>\n\n"
-        f"🟢 Активных подписок: <b>{active_subs}</b>\n"
-        f"🎁 Только триал (не купили): <b>{trial_users}</b>\n\n"
-        f"💰 Доходов всего: <b>{revenue['total']} ₽</b>\n"
-        f"🧾 Успешных оплат: <b>{revenue['count']}</b>"
+        "📊 <b>Панель управления VpNLi</b>\n"
+        "\n"
+        "👥 <b>Пользователи</b>\n"
+        f"  Всего: <b>{users}</b>\n"
+        f"  За сегодня: <b>+{new_day}</b> · за неделю: <b>+{new_week}</b>\n\n"
+        "📡 <b>Подписки</b>\n"
+        f"  Активных сейчас: <b>{active_subs}</b>\n"
+        f"  Только триал: <b>{trial_users}</b>\n\n"
+        "💳 <b>Оплаты</b>\n"
+        f"  Всего: <b>{revenue['total']} ₽</b> · <b>{revenue['count']}</b> шт.\n"
+        f"  Конверсия: <b>{conversion}</b>\n"
     )
     await call.message.edit_text(text, reply_markup=kb.admin_menu_kb())
 
@@ -115,11 +129,13 @@ async def adm_broadcast_start(call: CallbackQuery, state: FSMContext):
         await call.answer("⛔", show_alert=True)
         return
     await call.message.edit_text(
-        "📣 <b>Рассылка</b>\n\n"
-        "Отправьте сообщение, которое получат все пользователи.\n\n"
-        "• Поддерживаются HTML-теги и медиафайлы\n"
-        "• Сообщение отправится точно в том виде, как вы его пришлёте\n\n"
-        "<i>Для отмены — вернитесь в админ-панель</i>",
+        "📣 <b>Простая рассылка</b>\n"
+        "\n"
+        "Отправьте сообщение для рассылки.\n\n"
+        "✅ Поддерживаются:\n"
+        "  • Текст с HTML-тегами\n"
+        "  • Фото, видео, документы, GIF\n\n"
+        "⚡ Сообщение уйдёт <b>в точности</b> как вы его пришлёте.",
         reply_markup=kb.admin_back_kb(),
     )
     await state.set_state(AdminState.waiting_broadcast)
@@ -170,89 +186,267 @@ async def adm_broadcast_with_buttons_start(call: CallbackQuery, state: FSMContex
         await call.answer("⛔", show_alert=True)
         return
     await call.message.edit_text(
-        "📣 <b>Рассылка с кнопками</b>\n\n"
-        "Пришлите одним сообщением шаблон:\n\n"
-        "<code>Текст рассылки\n"
-        "---\n"
-        "Текст кнопки 1 | callback:buy\n"
-        "Текст кнопки 2 | url:https://t.me/your_channel</code>\n\n"
-        "Правила:\n"
-        "• разделитель между текстом и кнопками: <code>---</code>\n"
-        "• кнопка: <code>Название | callback:...</code> или <code>Название | url:...</code>\n"
-        "• не более 8 кнопок\n\n"
-        "<i>Для отмены — вернитесь в админ-панель</i>",
+        "🎯 <b>Рассылка с кнопками</b>\n"
+        "\n"
+        "<b>Шаг 1</b> — отправьте сообщение (текст + медиа).\n\n"
+        "После этого вы сможете добавить кнопки перед отправкой.",
         reply_markup=kb.admin_back_kb(),
     )
-    await state.set_state(AdminState.waiting_broadcast_buttons)
+    await state.set_state(AdminState.waiting_broadcast_text)
+    await state.update_data(broadcast_buttons=[], broadcast_media=None)
 
 
-def _build_broadcast_keyboard(raw_rows: list[str]):
-    builder = InlineKeyboardBuilder()
-    parsed = 0
-    for row in raw_rows:
-        line = row.strip()
-        if not line:
-            continue
-        if "|" not in line:
-            raise ValueError(f"Неверный формат строки кнопки: {line}")
-        label, action = [part.strip() for part in line.split("|", 1)]
-        if not label or not action:
-            raise ValueError(f"Неверный формат строки кнопки: {line}")
-        if action.startswith("callback:"):
-            cb = action.split("callback:", 1)[1].strip()
-            if not cb:
-                raise ValueError(f"Пустой callback: {line}")
-            builder.row(InlineKeyboardButton(text=label, callback_data=cb))
-        elif action.startswith("url:"):
-            url = action.split("url:", 1)[1].strip()
-            if not url.startswith("http://") and not url.startswith("https://"):
-                raise ValueError(f"URL должен начинаться с http(s): {line}")
-            builder.row(InlineKeyboardButton(text=label, url=url))
-        else:
-            raise ValueError(f"Действие должно быть callback: или url: {line}")
-        parsed += 1
-        if parsed > 8:
-            raise ValueError("Слишком много кнопок (максимум 8).")
-    if parsed == 0:
-        raise ValueError("Не найдено ни одной кнопки.")
-    return builder.as_markup()
-
-
-@router.message(AdminState.waiting_broadcast_buttons)
-async def adm_broadcast_with_buttons_send(message: Message, state: FSMContext, bot: Bot):
+@router.message(AdminState.waiting_broadcast_text)
+async def adm_broadcast_text_received(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
 
-    raw = (message.text or "").strip()
-    if not raw or "---" not in raw:
-        await message.answer("❌ Формат неверный. Нужен разделитель <code>---</code> между текстом и кнопками.")
+    broadcast_text = message.text or message.caption or ""
+    if not broadcast_text.strip():
+        await message.answer("❌ Текст пустой. Отправьте сообщение для рассылки.")
         return
 
-    text_part, buttons_part = raw.split("---", 1)
-    text_part = text_part.strip()
-    button_rows = [line for line in buttons_part.strip().splitlines() if line.strip()]
-    if not text_part:
-        await message.answer("❌ Текст рассылки пустой.")
+    media_type = None
+    media_id = None
+    if message.photo:
+        media_type = "photo"
+        media_id = message.photo[-1].file_id
+    elif message.video:
+        media_type = "video"
+        media_id = message.video.file_id
+    elif message.document:
+        media_type = "document"
+        media_id = message.document.file_id
+    elif message.animation:
+        media_type = "animation"
+        media_id = message.animation.file_id
+
+    raw_entities = message.entities or message.caption_entities
+    serializable_entities = None
+    if raw_entities:
+        serializable_entities = [e.model_dump() for e in raw_entities]
+
+    await state.update_data(
+        broadcast_text=broadcast_text,
+        broadcast_media_type=media_type,
+        broadcast_media_id=media_id,
+        broadcast_entities=serializable_entities,
+        broadcast_source_chat_id=message.chat.id,
+        broadcast_source_message_id=message.message_id,
+    )
+    buttons = []
+    await _show_broadcast_preview(message, state, buttons)
+
+
+async def _show_broadcast_preview(message: Message, state: FSMContext, buttons: list[dict]):
+    data = await state.get_data()
+    broadcast_text = data.get("broadcast_text", "")
+    media_type = data.get("broadcast_media_type")
+    btn_count = len(buttons)
+
+    media_badge = ""
+    if media_type == "photo":
+        media_badge = "🖼 Фото + "
+    elif media_type == "video":
+        media_badge = "🎬 Видео + "
+    elif media_type == "document":
+        media_badge = "📎 Документ + "
+    elif media_type == "animation":
+        media_badge = "🎞 GIF + "
+
+    text_preview = broadcast_text[:200]
+    if len(broadcast_text) > 200:
+        text_preview += "..."
+
+    preview = (
+        f"🎯 <b>Предпросмотр рассылки</b>\n"
+        "\n"
+        f"📝 {media_badge}<b>Текст:</b>\n"
+        f"{text_preview}\n\n"
+    )
+    if buttons:
+        preview += f"🔘 <b>Кнопки</b> ({btn_count}/8):\n"
+        for i, btn in enumerate(buttons, 1):
+            kind = "🔗" if btn.get("type") == "url" else "📌"
+            preview += f"  {i}. {kind} {btn['label']}\n"
+    else:
+        preview += "🔘 Без кнопок\n"
+
+    kb_builder = InlineKeyboardBuilder()
+    for btn in buttons:
+        if btn.get("type") == "url":
+            kb_builder.row(InlineKeyboardButton(text=f"🔗 {btn['label']}", url=btn["url"]))
+        else:
+            kb_builder.row(InlineKeyboardButton(text=f"📌 {btn['label']}", callback_data=btn["callback"]))
+
+    if btn_count < 8:
+        kb_builder.row(InlineKeyboardButton(text="➕ Добавить кнопку", callback_data="broadcast_add_btn", style=ButtonStyle.PRIMARY))
+    kb_builder.row(InlineKeyboardButton(text="🚀 Отправить рассылку", callback_data="broadcast_send_now", style=ButtonStyle.SUCCESS))
+    kb_builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="adm_back", style=ButtonStyle.DANGER))
+
+    await message.answer(preview, reply_markup=kb_builder.as_markup())
+    await state.update_data(broadcast_buttons=buttons)
+
+
+@router.callback_query(F.data == "broadcast_add_btn")
+async def adm_broadcast_add_btn(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_text(
+        "➕ <b>Добавление кнопки</b>\n\n"
+        "<b>Шаг 2/3</b> — отправьте <b>текст кнопки</b>.\n\n"
+        "Например: <code>Открыть канал</code> или <code>Купить VPN</code>",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel_add")
+        ).as_markup(),
+    )
+    await state.set_state(AdminState.waiting_broadcast_btn_label)
+
+
+@router.callback_query(F.data == "broadcast_cancel_add")
+async def adm_broadcast_cancel_add(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+    await call.answer()
+    await _show_broadcast_preview(call.message, state, buttons)
+    await state.set_state(AdminState.waiting_broadcast_text)
+
+
+@router.message(AdminState.waiting_broadcast_btn_label)
+async def adm_broadcast_btn_label_received(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
         return
 
-    try:
-        reply_markup = _build_broadcast_keyboard(button_rows)
-    except ValueError as exc:
-        await message.answer(f"❌ {html.escape(str(exc))}")
+    label = (message.text or "").strip()
+    if not label:
+        await message.answer("❌ Текст кнопки пустой. Попробуйте ещё раз.")
         return
+    if len(label) > 64:
+        await message.answer("❌ Текст кнопки слишком длинный (максимум 64 символа).")
+        return
+
+    await state.update_data(pending_btn_label=label)
+    kb_builder = InlineKeyboardBuilder()
+    kb_builder.row(
+        InlineKeyboardButton(text="📌 Callback-кнопка", callback_data="broadcast_btn_type_callback"),
+        InlineKeyboardButton(text="🔗 URL-кнопка", callback_data="broadcast_btn_type_url"),
+    )
+    kb_builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel_add"))
+    await message.answer(
+        f"Текст кнопки: <b>{html.escape(label)}</b>\n\n"
+        "<b>Шаг 3/3</b> — выберите тип кнопки:",
+        reply_markup=kb_builder.as_markup(),
+    )
+    await state.set_state(AdminState.waiting_broadcast_btn_action)
+
+
+@router.callback_query(F.data == "broadcast_btn_type_callback")
+async def adm_broadcast_btn_type_callback(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_text(
+        "📌 <b>Callback-кнопка</b>\n\n"
+        "Отправьте callback data (идентификатор действия).\n\n"
+        "Пример: <code>buy</code>, <code>my_subs</code>, <code>support</code>",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel_add")
+        ).as_markup(),
+    )
+    await state.update_data(pending_btn_type="callback")
+
+
+@router.callback_query(F.data == "broadcast_btn_type_url")
+async def adm_broadcast_btn_type_url(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    await call.message.edit_text(
+        "🔗 <b>URL-кнопка</b>\n\n"
+        "Отправьте URL-адрес.\n\n"
+        "Пример: <code>https://t.me/your_channel</code>",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel_add")
+        ).as_markup(),
+    )
+    await state.update_data(pending_btn_type="url")
+
+
+@router.message(AdminState.waiting_broadcast_btn_action)
+async def adm_broadcast_btn_action_received(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    btn_type = data.get("pending_btn_type", "callback")
+    btn_label = data.get("pending_btn_label", "")
+    action = (message.text or "").strip()
+
+    if not action:
+        await message.answer("❌ Действие пустое. Попробуйте ещё раз.")
+        return
+
+    if btn_type == "url":
+        if not action.startswith("http://") and not action.startswith("https://"):
+            await message.answer("❌ URL должен начинаться с http:// или https://")
+            return
+        btn = {"label": btn_label, "type": "url", "url": action}
+    else:
+        btn = {"label": btn_label, "type": "callback", "callback": action}
+
+    buttons = data.get("broadcast_buttons", [])
+    buttons.append(btn)
+    await state.update_data(broadcast_buttons=buttons, pending_btn_label=None, pending_btn_type=None)
+    await _show_broadcast_preview(message, state, buttons)
+    await state.set_state(AdminState.waiting_broadcast_text)
+
+
+@router.callback_query(F.data == "broadcast_send_now")
+async def adm_broadcast_send_now(call: CallbackQuery, state: FSMContext, bot: Bot):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+
+    data = await state.get_data()
+    broadcast_text = data.get("broadcast_text", "")
+    buttons = data.get("broadcast_buttons", [])
+    source_chat_id = data.get("broadcast_source_chat_id")
+    source_message_id = data.get("broadcast_source_message_id")
+
+    if not broadcast_text.strip():
+        await call.answer("Текст рассылки пуст.", show_alert=True)
+        return
+
+    reply_markup = None
+    if buttons:
+        builder = InlineKeyboardBuilder()
+        for btn in buttons:
+            if btn.get("type") == "url":
+                builder.row(InlineKeyboardButton(text=btn["label"], url=btn["url"]))
+            else:
+                builder.row(InlineKeyboardButton(text=btn["label"], callback_data=btn["callback"]))
+        reply_markup = builder.as_markup()
 
     users = await db.get_all_users()
     sent = 0
     failed = 0
-    status_msg = await message.answer(f"📤 Рассылка с кнопками: 0 / {len(users)}...")
+    await call.answer("🚀 Отправка...")
+    status_msg = await call.message.edit_text(f"📤 Рассылка: 0 / {len(users)}...")
 
     for i, user in enumerate(users):
         try:
-            await bot.send_message(
+            await bot.copy_message(
                 chat_id=user["tg_id"],
-                text=text_part,
+                from_chat_id=source_chat_id,
+                message_id=source_message_id,
                 reply_markup=reply_markup,
-                disable_web_page_preview=True,
             )
             sent += 1
         except Exception:
@@ -261,16 +455,19 @@ async def adm_broadcast_with_buttons_send(message: Message, state: FSMContext, b
         if (i + 1) % 20 == 0:
             try:
                 await status_msg.edit_text(
-                    f"📤 Рассылка с кнопками: {i + 1} / {len(users)}... ({sent} ✅ {failed} ❌)"
+                    f"📤 Рассылка: {i + 1} / {len(users)}... ({sent} ✅ {failed} ❌)"
                 )
             except Exception:
-                logger.debug("Failed to update broadcast-with-buttons progress message", exc_info=True)
+                logger.debug("Failed to update broadcast progress message", exc_info=True)
+
         await asyncio.sleep(0.05)
 
     await status_msg.edit_text(
-        f"✅ <b>Рассылка завершена</b>\n\n"
-        f"📤 Отправлено: <b>{sent}</b>\n"
-        f"❌ Ошибок: <b>{failed}</b>",
+        f"✅ <b>Рассылка завершена</b>\n"
+        "\n"
+        f"📤 Успешно: <b>{sent}</b>\n"
+        f"❌ Ошибок: <b>{failed}</b>\n\n"
+        f"{'🎉 Все доставлено!' if failed == 0 else '⚠️ Часть сообщений не доставлена (бот заблокирован и т.п.)'}",
         reply_markup=kb.admin_menu_kb(),
     )
     await state.clear()
@@ -291,10 +488,11 @@ async def adm_create_promo_start(call: CallbackQuery, state: FSMContext):
         return
 
     await call.message.edit_text(
-        "✨ <b>Создание промокода</b>\n\n"
-        "<b>Шаг 1/4 — Название</b>\n\n"
-        "Введите код (без пробелов, минимум 3 символа).\n"
-        "Например: <code>SUMMER50</code>, <code>VPN30</code>",
+        "✨ <b>Создание промокода</b>\n"
+        "\n"
+        "<b>Шаг 1/4</b> — Название кода\n\n"
+        "Введите код (без пробелов, 3+ символов).\n"
+        "Пример: <code>SUMMER50</code>, <code>VPN30</code>",
         reply_markup=kb.admin_back_kb(),
     )
     await state.set_state(AdminState.waiting_promo_code)
@@ -305,11 +503,20 @@ async def adm_promo_menu(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("⛔", show_alert=True)
         return
+    promos = await db.list_promocodes(limit=100)
+    active_count = sum(1 for p in promos if not p.get("expires_at") or p["expires_at"] > datetime.utcnow().isoformat())
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="➕ Создать промокод", callback_data="adm_create_promo"))
-    builder.row(InlineKeyboardButton(text="📚 Существующие промокоды", callback_data="adm_list_promos"))
+    builder.row(
+        InlineKeyboardButton(text="➕ Создать", callback_data="adm_create_promo", style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton(text="📚 Список", callback_data="adm_list_promos"),
+    )
     builder.row(InlineKeyboardButton(text="◀️ В админ-панель", callback_data="adm_back"))
-    await call.message.edit_text("🎟 <b>Промокоды</b>\n\nВыберите действие:", reply_markup=builder.as_markup())
+    await call.message.edit_text(
+        "🎟 <b>Промокоды</b>\n"
+        "\n"
+        f"Всего: <b>{len(promos)}</b> · Активных: <b>{active_count}</b>",
+        reply_markup=builder.as_markup(),
+    )
 
 
 @router.callback_query(F.data == "adm_list_promos")
@@ -319,17 +526,32 @@ async def adm_list_promos(call: CallbackQuery):
         return
     promos = await db.list_promocodes(limit=100)
     if not promos:
-        await call.message.edit_text("📚 Промокодов пока нет.", reply_markup=kb.admin_back_kb())
+        await call.message.edit_text(
+            "📚 <b>Промокоды</b>\n\nПока нет промокодов.\nСоздайте первый!",
+            reply_markup=InlineKeyboardBuilder().row(
+                InlineKeyboardButton(text="➕ Создать", callback_data="adm_create_promo", style=ButtonStyle.SUCCESS)
+            ).row(
+                InlineKeyboardButton(text="◀️ Назад", callback_data="adm_promo_menu")
+            ).as_markup(),
+        )
         return
     builder = InlineKeyboardBuilder()
     lines = []
-    for promo in promos[:30]:
+    for promo in promos[:15]:
         remaining = max(0, promo["max_activations"] - promo["used_count"])
-        until = promo["expires_at"][:10] if promo["expires_at"] else "без срока"
-        lines.append(f"• <b>{promo['code']}</b> · {_promo_discount_text(promo['discount_value'])} · {remaining}/{promo['max_activations']} · до {until}")
-        builder.row(InlineKeyboardButton(text=f"✏️ {promo['code']}", callback_data=f"adm_promo_{promo['id']}"))
-    builder.row(InlineKeyboardButton(text="◀️ К промокодам", callback_data="adm_promo_menu"))
-    await call.message.edit_text("📚 <b>Существующие промокоды</b>\n\n" + "\n".join(lines), reply_markup=builder.as_markup())
+        until = promo["expires_at"][:10] if promo["expires_at"] else "∞"
+        is_expired = promo["expires_at"] and promo["expires_at"] < datetime.utcnow().isoformat()
+        badge = "🔴" if is_expired or remaining == 0 else "🟢"
+        lines.append(f"{badge} <b>{promo['code']}</b> · {_promo_discount_text(promo['discount_value'])} · {remaining}/{promo['max_activations']} · до {until}")
+        builder.row(InlineKeyboardButton(text=f"{badge} {promo['code']}", callback_data=f"adm_promo_{promo['id']}"))
+    builder.row(InlineKeyboardButton(text="➕ Создать", callback_data="adm_create_promo", style=ButtonStyle.SUCCESS))
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="adm_promo_menu"))
+    await call.message.edit_text(
+        "📚 <b>Промокоды</b>\n"
+        "\n"
+        + "\n".join(lines),
+        reply_markup=builder.as_markup(),
+    )
 
 
 @router.callback_query(F.data.regexp(r"^adm_promo_\d+$"))
@@ -346,20 +568,32 @@ async def adm_open_promo(call: CallbackQuery):
     if not promo:
         await call.answer("Промокод не найден.", show_alert=True)
         return
-    until = promo["expires_at"][:10] if promo["expires_at"] else "без срока"
+    until = promo["expires_at"][:10] if promo["expires_at"] else "∞"
+    remaining = max(0, promo["max_activations"] - promo["used_count"])
+    is_expired = promo["expires_at"] and promo["expires_at"] < datetime.utcnow().isoformat()
+    badge = "🔴 Истёк/исчерпан" if is_expired or remaining == 0 else "🟢 Активен"
+    progress = promo["used_count"] / promo["max_activations"] if promo["max_activations"] > 0 else 0
+    bar_filled = round(progress * 10)
+    bar = f"{'▓' * bar_filled}{'░' * (10 - bar_filled)} {int(progress * 100)}%"
+
     text = (
-        "🎟 <b>Промокод</b>\n\n"
-        f"Код: <b>{promo['code']}</b>\n"
-        f"Скидка: <b>{_promo_discount_text(promo['discount_value'])}</b>\n"
-        f"Лимит: <b>{promo['max_activations']}</b>\n"
-        f"Использовано: <b>{promo['used_count']}</b>\n"
-        f"До: <b>{until}</b>"
+        f"🎟 <b>{promo['code']}</b>\n"
+        "\n"
+        f"Статус: {badge}\n"
+        f"💸 Скидка: <b>{_promo_discount_text(promo['discount_value'])}</b>\n"
+        f"📅 До: <b>{until}</b>\n\n"
+        f"🔢 Использовано: <b>{promo['used_count']}/{promo['max_activations']}</b>\n"
+        f"▸ {bar}"
     )
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="✏️ Изменить скидку", callback_data=f"adm_promo_edit_discount_{promo_id}"))
-    builder.row(InlineKeyboardButton(text="✏️ Изменить лимит", callback_data=f"adm_promo_edit_limit_{promo_id}"))
-    builder.row(InlineKeyboardButton(text="✏️ Изменить срок", callback_data=f"adm_promo_edit_exp_{promo_id}"))
-    builder.row(InlineKeyboardButton(text="🗑 Удалить промокод", callback_data=f"adm_promo_del_{promo_id}"))
+    builder.row(
+        InlineKeyboardButton(text="💸 Скидка", callback_data=f"adm_promo_edit_discount_{promo_id}"),
+        InlineKeyboardButton(text="🔢 Лимит", callback_data=f"adm_promo_edit_limit_{promo_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📅 Срок", callback_data=f"adm_promo_edit_exp_{promo_id}"),
+    )
+    builder.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_promo_del_{promo_id}", style=ButtonStyle.DANGER))
     builder.row(InlineKeyboardButton(text="◀️ К списку", callback_data="adm_list_promos"))
     await call.message.edit_text(text, reply_markup=builder.as_markup())
 
@@ -625,44 +859,43 @@ async def _render_users_list(target: CallbackQuery, offset: int = 0) -> None:
     for user in users:
         username = user.get("username") or "—"
         safe_username = html.escape(username)
+        marker = " ⛔" if user.get("is_banned") else ""
         lines.append(
-            f"• DB <code>{user['id']}</code> · TG <code>{user['tg_id']}</code> · @{safe_username}"
+            f"• @{safe_username} <code>{user['tg_id']}</code>{marker}"
         )
 
     builder = InlineKeyboardBuilder()
     for user in users:
+        username = user.get("username") or "—"
+        marker = " ⛔" if user.get("is_banned") else ""
         builder.row(
             InlineKeyboardButton(
-                text=f"Открыть DB {user['id']} · TG {user['tg_id']}",
+                text=f"@{username}{marker} · {user['tg_id']}",
                 callback_data=f"adm_u_{user['tg_id']}",
             )
         )
 
-    prev_offset = max(0, safe_offset - USER_LIST_PAGE_SIZE)
-    next_offset = safe_offset + USER_LIST_PAGE_SIZE
     nav_row = []
     if safe_offset > 0:
         nav_row.append(
-            InlineKeyboardButton(text="⬅️ Назад", callback_data=f"adm_find_user_page_{prev_offset}")
+            InlineKeyboardButton(text="⬅️", callback_data=f"adm_find_user_page_{prev_offset}")
         )
-    if next_offset < total:
+    nav_row.append(
+        InlineKeyboardButton(text=f"📄 {page}/{pages}", callback_data="adm_find_user_page_0")
+    )
+    if safe_offset + USER_LIST_PAGE_SIZE < total:
         nav_row.append(
-            InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"adm_find_user_page_{next_offset}")
+            InlineKeyboardButton(text="➡️", callback_data=f"adm_find_user_page_{safe_offset + USER_LIST_PAGE_SIZE}")
         )
-    if nav_row:
+    if len(nav_row) > 1:
         builder.row(*nav_row)
     builder.row(InlineKeyboardButton(text="◀️ В админ-панель", callback_data="adm_back"))
 
     text = (
-        "🔍 <b>Пользователи</b>\n\n"
-        f"Страница <b>{page}/{pages}</b> · всего <b>{total}</b>\n\n"
+        "👥 <b>Пользователи</b>\n\n"
+        f"Всего: <b>{total}</b> · Стр. <b>{page}/{pages}</b>\n\n"
         + "\n".join(lines)
-        + "\n\n"
-        "Можно отправить сообщение для фильтра:\n"
-        "• Telegram ID\n"
-        "• @username или username\n"
-        "• имя/фамилию\n"
-        "• реферальный код"
+        + "\n\n💬 Или отправьте для поиска:\nTG ID · @username · имя · реферальный код"
     )
     await target.message.edit_text(text, reply_markup=builder.as_markup())
 
@@ -691,12 +924,14 @@ def _user_actions_kb(tg_id: int, is_banned: bool):
     action_kb = InlineKeyboardBuilder()
     ban_label = "🔓 Разбанить" if is_banned else "🚫 Забанить"
     ban_value = 0 if is_banned else 1
-    action_kb.row(InlineKeyboardButton(text=ban_label, callback_data=f"adm_ban_{tg_id}_{ban_value}"))
-    action_kb.row(InlineKeyboardButton(text="⚡ Продлить +30 дней", callback_data=f"adm_ext_{tg_id}_30"))
-    action_kb.row(InlineKeyboardButton(text="➕ Выдать новую подписку", callback_data=f"adm_grant_{tg_id}"))
-    action_kb.row(InlineKeyboardButton(text="🧊 Отключить все подписки", callback_data=f"adm_deact_{tg_id}"))
-    action_kb.row(InlineKeyboardButton(text="🔍 К поиску", callback_data="adm_find_user"))
-    action_kb.row(InlineKeyboardButton(text="🏠 Панель", callback_data="adm_back"))
+    ban_style = ButtonStyle.SUCCESS if is_banned else ButtonStyle.DANGER
+    action_kb.row(InlineKeyboardButton(text=ban_label, callback_data=f"adm_ban_{tg_id}_{ban_value}", style=ban_style))
+    action_kb.row(
+        InlineKeyboardButton(text="⚡ Продлить +30 дн.", callback_data=f"adm_ext_{tg_id}_30"),
+        InlineKeyboardButton(text="➕ Выдать подписку", callback_data=f"adm_grant_{tg_id}"),
+    )
+    action_kb.row(InlineKeyboardButton(text="🧊 Отключить все подписки", callback_data=f"adm_deact_{tg_id}", style=ButtonStyle.DANGER))
+    action_kb.row(InlineKeyboardButton(text="◀️ К поиску", callback_data="adm_find_user"))
     return action_kb.as_markup()
 
 
@@ -715,27 +950,31 @@ async def _user_card_text(user: dict) -> str:
     safe_username = html.escape(user.get("username") or "—")
     safe_full_name = html.escape(user.get("full_name") or "—")
 
+    status = "⛔ Забанен" if user["is_banned"] else "🟢 Активен"
+    trial = "✅ Использован" if user.get("trial_used") else "❌ Не использован"
+    paid = "✅ Да" if paid_before else "❌ Нет"
+
     sub_lines = []
-    for s in active[:8]:
+    for s in active[:5]:
         exp = datetime.fromisoformat(s["expires_at"])
         days_left = max(0, (exp - now).days)
-        sub_lines.append(f"• #{s['id']} · {s['devices']}📱 · до {exp.strftime('%d.%m.%Y')} ({days_left} дн.)")
+        badge = "🟢" if days_left > 7 else "🟡" if days_left > 1 else "🔴"
+        sub_lines.append(f"  {badge} №{s['id']} · {s['devices']}📱 · {days_left} дн. · до {exp.strftime('%d.%m')}")
     if not sub_lines:
-        sub_lines.append("• нет активных")
+        sub_lines.append("  ⚫ Нет активных")
 
     return (
-        "👤 <b>Карточка пользователя</b>\n\n"
-        f"🆔 TG ID: <code>{user['tg_id']}</code>\n"
-        f"🗂 DB ID: <code>{user['id']}</code>\n"
-        f"Username: @{safe_username}\n"
-        f"Имя: {safe_full_name}\n"
+        f"👤 <b>{safe_full_name}</b>\n"
+        f"@{safe_username}\n"
+        "\n"
+        f"🆔 <code>{user['tg_id']}</code>\n"
         f"📅 Регистрация: {joined}\n"
-        f"🧪 Триал использован: {'Да' if user.get('trial_used') else 'Нет'}\n"
-        f"💳 Были оплаты: {'Да' if paid_before else 'Нет'}\n"
-        f"🚫 Бан: {'Да ⛔' if user['is_banned'] else 'Нет'}\n\n"
-        f"📡 Подписок: всего <b>{len(subs)}</b> · активных <b>{len(active)}</b>\n"
-        + "\n".join(sub_lines)
-        + f"\n\n👥 Рефералов приглашено: {ref_stats['invited']}"
+        f"Статус: {status}\n\n"
+        f"🧪 Триал: {trial}\n"
+        f"💳 Оплаты: {paid}\n\n"
+        f"📡 <b>Подписки</b> ({len(active)} актив.)\n"
+        + "\n".join(sub_lines) + "\n\n"
+        f"👥 Рефералов: <b>{ref_stats['invited']}</b>"
     )
 
 
@@ -778,16 +1017,20 @@ async def adm_find_user(message: Message, state: FSMContext):
 
     builder = InlineKeyboardBuilder()
     for user in users:
+        username = user.get("username") or "—"
+        marker = " ⛔" if user.get("is_banned") else ""
         builder.row(
             InlineKeyboardButton(
-                text=_user_row_label(user),
+                text=f"@{username}{marker} · {user['tg_id']}",
                 callback_data=f"adm_u_{user['tg_id']}",
             )
         )
     builder.row(InlineKeyboardButton(text="◀️ В админ-панель", callback_data="adm_back"))
 
     await message.answer(
-        f"👥 Найдено: <b>{len(users)}</b>\nВыберите пользователя:",
+        f"👥 <b>Найдено: {len(users)}</b>\n"
+        "\n"
+        "Выберите пользователя:",
         reply_markup=builder.as_markup(),
     )
     await state.clear()
@@ -812,8 +1055,8 @@ async def adm_back(call: CallbackQuery):
         await call.answer("⛔", show_alert=True)
         return
     await call.message.edit_text(
-        "🛠 <b>Панель администратора</b>\n\n"
-        "Выберите действие: аналитика, рассылка, промокоды или поиск пользователя.",
+        "🛠 <b>VpNLi Admin</b>\n\n"
+        "Статистика, рассылки, промокоды, пользователи — всё здесь.",
         reply_markup=kb.admin_menu_kb(),
     )
 
@@ -894,14 +1137,14 @@ async def adm_deactivate_all_user_subscriptions(call: CallbackQuery):
     for sub in subs:
         if sub.get("xui_client_id"):
             try:
-                await xui.delete_client(sub["xui_client_id"])
+                await xui.delete_client(sub["xui_client_id"], email=sub.get("email"))
             except Exception:
                 logger.exception("Failed to delete xui client %s", sub["xui_client_id"])
         clients = await db.get_active_vpn_clients_for_subscription(sub["id"])
         for client in clients:
             if client.get("xui_client_id"):
                 try:
-                    await xui.delete_client(client["xui_client_id"])
+                    await xui.delete_client(client["xui_client_id"], email=client.get("email"))
                 except Exception:
                     logger.exception("Failed to delete legacy xui client %s", client["xui_client_id"])
                 await db.deactivate_vpn_client(client["xui_client_id"])
@@ -918,22 +1161,35 @@ async def adm_grant_subscription_menu(call: CallbackQuery):
         return
     try:
         tg_id = int(call.data.split("_", 2)[2])
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError):
         await call.answer("Некорректная команда.", show_alert=True)
         return
 
+    user = await db.get_user(tg_id)
+    username = user.get("username") or "—" if user else "—"
+
     builder = InlineKeyboardBuilder()
     for devices in sorted(PRICES.keys()):
+        row_buttons = []
         for months in sorted(PRICES[devices].keys()):
-            builder.row(
+            price = PRICES[devices][months]
+            row_buttons.append(
                 InlineKeyboardButton(
-                    text=f"{months} мес · {devices} устр",
+                    text=f"{months}м · {devices}📱 · {price}₽",
                     callback_data=f"adm_give_{tg_id}_{months}_{devices}",
                 )
             )
+            if len(row_buttons) == 2:
+                builder.row(*row_buttons)
+                row_buttons = []
+        if row_buttons:
+            builder.row(*row_buttons)
     builder.row(InlineKeyboardButton(text="◀️ К карточке", callback_data=f"adm_u_{tg_id}"))
     await call.message.edit_text(
-        "➕ <b>Выдача новой подписки</b>\n\nВыберите готовый тариф:",
+        f"➕ <b>Выдать подписку</b>\n"
+        f"@{html.escape(username)} · <code>{tg_id}</code>\n"
+        "\n"
+        "Выберите тариф:",
         reply_markup=builder.as_markup(),
     )
 
