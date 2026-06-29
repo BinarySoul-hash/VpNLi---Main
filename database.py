@@ -7,7 +7,7 @@ import os
 import sqlite3
 import uuid
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -17,7 +17,7 @@ from config import DB_BACKUP_DIR, DB_BACKUP_KEEP, DB_PATH, TRIAL_LOCK_STALE_SECO
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _utcnow_iso() -> str:
@@ -576,6 +576,49 @@ async def get_users_count() -> int:
         async with db.execute("SELECT COUNT(*) FROM users") as cur:
             row = await cur.fetchone()
             return int(row[0]) if row else 0
+
+
+async def get_admin_stats() -> dict:
+    now = _utcnow()
+    week_ago = (now - timedelta(days=7)).isoformat()
+    day_ago = (now - timedelta(days=1)).isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM subscriptions WHERE is_active = 1 AND expires_at > ?",
+            (_utcnow_iso(),),
+        ) as cur:
+            active_subs = int((await cur.fetchone())[0])
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM users WHERE trial_used = 1 AND id NOT IN (SELECT DISTINCT user_id FROM payments WHERE status = 'paid')"
+        ) as cur:
+            trial_users = int((await cur.fetchone())[0])
+
+        async with db.execute(
+            "SELECT COUNT(DISTINCT user_id) FROM payments WHERE status = 'paid'"
+        ) as cur:
+            paid_users = int((await cur.fetchone())[0])
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= ?",
+            (week_ago,),
+        ) as cur:
+            new_week = int((await cur.fetchone())[0])
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM users WHERE created_at >= ?",
+            (day_ago,),
+        ) as cur:
+            new_day = int((await cur.fetchone())[0])
+
+    return {
+        "active_subs": active_subs,
+        "trial_users": trial_users,
+        "paid_users": paid_users,
+        "new_week": new_week,
+        "new_day": new_day,
+    }
 
 
 async def ban_user(tg_id: int, banned: bool = True) -> None:
@@ -1601,6 +1644,16 @@ async def get_active_subscriptions_map() -> dict[str, dict]:
             WHERE is_active = 1 AND email IS NOT NULL AND expires_at > ?
             """,
             (now_iso,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return {row["email"]: dict(row) for row in rows}
+
+
+async def get_all_subscriptions_map() -> dict[str, dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM subscriptions WHERE email IS NOT NULL",
         ) as cur:
             rows = await cur.fetchall()
             return {row["email"]: dict(row) for row in rows}

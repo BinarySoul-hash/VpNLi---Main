@@ -36,6 +36,8 @@ from config import (
     XUI_ONLINES_TIMEOUT_SECONDS,
 )
 
+from tools.dates import safe_parse_expires_at, _utcnow, remaining_seconds, expires_dt_to_ms
+
 logger = logging.getLogger(__name__)
 
 
@@ -429,13 +431,15 @@ class XUIClient:
             if security == "reality":
                 reality = stream.get("realitySettings", {})
                 settings = reality.get("settings", {})
+                sni_list = reality.get("serverNames") or [""]
+                sid_list = reality.get("shortIds") or [""]
                 params.extend(
                     [
                         "security=reality",
                         f"pbk={settings.get('publicKey', '')}",
                         "fp=chrome",
-                        f"sni={reality.get('serverNames', [''])[0]}",
-                        f"sid={reality.get('shortIds', [''])[0]}",
+                        f"sni={sni_list[0]}",
+                        f"sid={sid_list[0]}",
                         "spx=%2F",
                         "flow=xtls-rprx-vision",
                     ]
@@ -762,7 +766,9 @@ class XUIClient:
                 if limit_ip is not None:
                     api_client["limitIp"] = max(1, int(limit_ip))
                 if expires_at is not None:
-                    api_client["expiryTime"] = int(datetime.fromisoformat(expires_at).timestamp() * 1000)
+                    expires_dt = safe_parse_expires_at(expires_at)
+                    if expires_dt:
+                        api_client["expiryTime"] = expires_dt_to_ms(expires_dt)
                 if enabled is not None:
                     api_client["enable"] = bool(enabled)
                 if total_gb is not None:
@@ -793,7 +799,9 @@ class XUIClient:
             if limit_ip is not None:
                 api_client["limitIp"] = max(1, int(limit_ip))
             if expires_at is not None:
-                api_client["expiryTime"] = int(datetime.fromisoformat(expires_at).timestamp() * 1000)
+                expires_dt = safe_parse_expires_at(expires_at)
+                if expires_dt:
+                    api_client["expiryTime"] = expires_dt_to_ms(expires_dt)
             if enabled is not None:
                 api_client["enable"] = bool(enabled)
             if total_gb is not None:
@@ -814,9 +822,10 @@ class XUIClient:
                 changed = True
 
         if expires_at is not None:
-            expires_ms = int(datetime.fromisoformat(expires_at).timestamp() * 1000)
-            client["expiryTime"] = expires_ms
-            changed = True
+            expires_dt = safe_parse_expires_at(expires_at)
+            if expires_dt:
+                client["expiryTime"] = expires_dt_to_ms(expires_dt)
+                changed = True
 
         if enabled is not None:
             client["enable"] = bool(enabled)
@@ -855,7 +864,17 @@ class XUIClient:
         )
 
     async def set_client_enabled(self, inbound_id: int, email: str, *, enabled: bool) -> bool:
-        return await self.update_client(inbound_id, email=email, enabled=enabled)
+        inbound = await self.get_inbound(inbound_id)
+        if not inbound:
+            return False
+        settings = self._parse_settings(inbound)
+        client = self._find_client(settings, email=email)
+        if not client:
+            return False
+        if client.get("enable") == enabled:
+            return True
+        client["enable"] = bool(enabled)
+        return await self._update_inbound(inbound, settings=settings)
 
     async def disable_client(self, inbound_id: int, email: str) -> bool:
         return await self.set_client_enabled(inbound_id, email, enabled=False)
@@ -864,7 +883,19 @@ class XUIClient:
         return await self.set_client_enabled(inbound_id, email, enabled=True)
 
     async def ensure_client_limit_ip(self, inbound_id: int, email: str, limit_ip: int) -> bool:
-        return await self.update_client(inbound_id, email=email, limit_ip=limit_ip)
+        inbound = await self.get_inbound(inbound_id)
+        if not inbound:
+            return False
+        settings = self._parse_settings(inbound)
+        client = self._find_client(settings, email=email)
+        if not client:
+            return False
+        value = max(1, int(limit_ip))
+        if client.get("limitIp") == value and client.get("enable"):
+            return True
+        client["limitIp"] = value
+        client["enable"] = True
+        return await self._update_inbound(inbound, settings=settings)
 
     def get_all_inbound_ids(self) -> list[int]:
         return self._target_inbound_ids(XUI_INBOUND_ID)
@@ -920,27 +951,26 @@ class XUIClient:
 
     async def delete_client(self, client_id: str, email: str | None = None) -> bool:
         if email:
-            deleted = await self._delete_client_via_clients_api(email)
-            if deleted is not None:
-                return deleted
+            await self._delete_client_via_clients_api(email)
 
+        all_deleted = True
         for inbound in await self.get_inbounds():
             settings = self._parse_settings(inbound)
             client = self._find_client(settings, client_id=client_id)
-            if client:
-                client_email = email or client.get("email")
-                if client_email:
-                    deleted = await self._delete_client_via_clients_api(client_email)
-                    if deleted is not None:
-                        return deleted
-                return await self.del_client(inbound["id"], client_id)
+            if not client:
+                continue
+            client_email = email or client.get("email")
+            if client_email:
+                result = await self._delete_client_via_clients_api(client_email)
+                if result is not None and result:
+                    continue
+            if not await self.del_client(inbound["id"], client_id):
+                all_deleted = False
 
         if email:
-            logger.debug("delete_client: client %s (email=%s) not found in inbound settings, clients API handled it", client_id, email)
             return True
 
-        logger.debug("delete_client: client %s not found in any inbound settings", client_id)
-        return False
+        return all_deleted
 
     async def reissue_subscription_client(self, subscription: dict) -> Optional[dict]:
         expires_at_raw = subscription.get("expires_at")
@@ -953,7 +983,7 @@ class XUIClient:
             logger.error("Invalid expires_at on subscription %s", subscription.get("id"))
             return None
 
-        remaining_seconds = max(0, (expires_at - datetime.utcnow()).total_seconds())
+        remaining_seconds = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
         expire_days = max(1, math.ceil(remaining_seconds / 86400))
         inbound_id = subscription.get("inbound_id") or XUI_INBOUND_ID
         devices = subscription.get("devices") or 1

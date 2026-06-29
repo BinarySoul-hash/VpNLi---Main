@@ -6,7 +6,7 @@ from __future__ import annotations
 import html
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -222,11 +222,6 @@ async def _ensure_subscription_link(sub: dict) -> dict | None:
     if not await xui.login():
         return None
 
-    try:
-        await xui.set_inbound_remark(sub["inbound_id"], INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to set inbound remark for sub %s", sub["id"])
-
     if sub.get("subscription_url") and sub.get("email") and sub.get("xui_client_id"):
         synced = await xui.sync_subscription_client(
             sub["inbound_id"],
@@ -240,7 +235,7 @@ async def _ensure_subscription_link(sub: dict) -> dict | None:
             return await db.get_subscription_by_id(sub["id"]) or sub
 
     expires_at = datetime.fromisoformat(sub["expires_at"])
-    remaining_seconds = max(0, (expires_at - datetime.utcnow()).total_seconds())
+    remaining_seconds = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
     expire_days = max(1, math.ceil(remaining_seconds / 86400))
     new_email = xui.build_client_email()
     created = await xui.add_client(
@@ -326,11 +321,6 @@ async def activate_trial(
             reply_markup=kb.back_to_menu_kb(),
         )
         return
-
-    try:
-        await xui.set_inbound_remark(XUI_INBOUND_ID, INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to update inbound remark for trial")
 
     email = xui.build_client_email()
     created = await xui.add_client(
@@ -933,7 +923,7 @@ async def subscription_detail(call: CallbackQuery, db_user: dict | None = None) 
 
     active_clients = await db.get_active_vpn_clients_for_subscription(sub_id)
     expires_at = datetime.fromisoformat(sub["expires_at"])
-    is_expired = (expires_at <= datetime.utcnow()) or (not sub["is_active"])
+    is_expired = (expires_at <= datetime.now(timezone.utc).replace(tzinfo=None)) or (not sub["is_active"])
 
     extra_text = ""
     if sub["is_active"] and sub.get("email"):
@@ -1117,11 +1107,6 @@ async def reset_reveals(call: CallbackQuery, db_user: dict | None = None) -> Non
         )
         return
 
-    try:
-        await xui.set_inbound_remark(sub["inbound_id"], INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to update inbound remark before reissue")
-
     rotated = await xui.reissue_subscription_client(sub)
     if not rotated:
         await call.message.edit_text(
@@ -1190,6 +1175,3 @@ async def _attach_display_number(user_id: int, sub: dict) -> dict:
     item = dict(sub)
     item["display_no"] = number_map.get(int(sub["id"]), int(sub["id"]))
     return item
-
-
-    sub = await _attach_display_number(db_user["id"], sub)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config import (
     PERIOD_DISCOUNTS,
@@ -31,7 +31,7 @@ def _days_bar(days_left: int, total_days: int) -> str:
 
 
 def _remaining_days(expires_at: datetime) -> int:
-    remaining_seconds = max(0, (expires_at - datetime.utcnow()).total_seconds())
+    remaining_seconds = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
     return int((remaining_seconds + 86399) // 86400)
 
 
@@ -597,7 +597,7 @@ def subscription_reissued(sub: dict) -> str:
 def device_limit_exceeded(sub: dict, online_ips: int, cooldown_seconds: int) -> str:
     return (
         "⛔ <b>Лимит устройств превышен</b>\n"
-        f"Подписка <b>№{sub['id']}</b> рассчитана на <b>{sub['devices']}</b> одновременных подключения.\n"
+        f"Подписка <b>№{_sub_no(sub)}</b> рассчитана на <b>{sub['devices']}</b> одновременных подключения.\n"
         f"Сейчас система увидела <b>{online_ips}</b> активных IP.\n\n"
         "Чтобы защитить ваш доступ, мы временно остановили эту подписку.\n\n"
         "Что сделать сейчас:\n"

@@ -7,7 +7,7 @@ import logging
 import html
 import math
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -146,159 +146,57 @@ async def _maybe_process_existing_pending_payment(
     return False
 
 
-async def _grant_referrer_bonus(referrer: dict, bonus_days: int) -> dict:
+async def _grant_referrer_bonus(referrer: dict, bonus_days: int) -> Optional[dict]:
     updated_sub = await db.extend_latest_active_subscription(referrer["id"], bonus_days)
     if updated_sub:
         return {"mode": "extended", "subscription": updated_sub}
-
-    try:
-        await xui.set_inbound_remark(XUI_INBOUND_ID, INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to sync inbound remark for referrer bonus")
-
-    email = xui.build_client_email()
-    created = await xui.add_client(
-        inbound_id=XUI_INBOUND_ID,
-        email=email,
-        devices=1,
-        expire_days=bonus_days,
-    )
-    if not created or not created.get("subscription_url"):
-        logger.error("Failed to create referrer bonus subscription for user %s", referrer["id"])
-        return {"mode": "failed"}
-
-    sub = await db.create_subscription(
-        user_id=referrer["id"],
-        xui_client_id=created["client_id"],
-        inbound_id=XUI_INBOUND_ID,
-        devices=1,
-        months=0,
-        vless_key=created.get("vless_key") or "",
-        days=bonus_days,
-        subscription_url=created["subscription_url"],
-        subscription_id=created["subscription_id"],
-        email=created["email"],
-    )
-    return {"mode": "created", "subscription": sub}
+    return None
 
 
 async def _maybe_apply_referrer_bonus(
     bot: Bot,
-    db_user: dict,
+    referred_user: dict,
     payment: dict,
     bonus_days: int,
 ) -> None:
-    if not db_user.get("referred_by") or bonus_days <= 0:
+    if bonus_days <= 0:
         return
 
-    if await db.has_referral_reward_for_payment(payment["id"]):
+    referrer_id = referred_user.get("referred_by")
+    if not referrer_id:
         return
 
-    referrer = await db.get_user_by_id(db_user["referred_by"])
+    already_rewarded = await db.has_referral_reward_for_payment(payment["id"])
+    if already_rewarded:
+        return
+
+    referrer = await db.get_user_by_id(referrer_id)
     if not referrer:
+        logger.warning("Referrer user %s not found for payment %s", referrer_id, payment["id"])
         return
 
-    # Monthly referral limit: max 5 paid referrals per 30 days
-    ref_stats = await db.get_referral_stats(referrer["id"])
-    if ref_stats.get("paid_this_month", 0) >= 5:
-        logger.info("Referrer %s reached monthly limit of 5 paid referrals", referrer["id"])
-        return
-
-    # A referrer can receive bonus from the same referred user only once.
-    if await db.has_referral_reward_for_pair(referrer["id"], db_user["id"]):
-        logger.info(
-            "Referrer %s already got bonus for referred user %s",
-            referrer["id"],
-            db_user["id"],
-        )
-        return
+    reward_amount = int(payment["amount"] * 20 / 100)
 
     result = await _grant_referrer_bonus(referrer, bonus_days)
-    if result["mode"] in {"extended", "created"}:
+    if result:
         await db.create_referral_reward(
             referrer_id=referrer["id"],
-            referred_id=db_user["id"],
+            referred_id=referred_user["id"],
             payment_id=payment["id"],
-            amount=bonus_days,
+            amount=reward_amount,
         )
-
-    try:
-        if result["mode"] == "extended":
-            exp = datetime.fromisoformat(result["subscription"]["expires_at"]).strftime("%d.%m.%Y")
-            period_label = PERIOD_LABELS.get(payment["months"], f"{payment['months']} мес.")
+        try:
             await bot.send_message(
                 referrer["tg_id"],
                 (
-                    "🎁 <b>Реферальный бонус зачислен</b>\n"
-                    f"{texts.DIVIDER}\n\n"
-                    f"Друг оплатил подписку на <b>{period_label}</b>.\n"
-                    f"К вашему доступу добавлено <b>+{bonus_days} дней</b>.\n"
-                    f"Новый срок: <b>{exp}</b>."
+                    "🎁 <b>Реферальный бонус</b>\n\n"
+                    f"Ваш приглашённый оплатил подписку!\n"
+                    f"На ваш баланс начислено <b>+{bonus_days} дней</b>.\n"
+                    f"Спасибо за приглашение!"
                 ),
             )
-        elif result["mode"] == "created":
-            await bot.send_message(
-                referrer["tg_id"],
-                (
-                    "🎁 <b>Реферальный бонус зачислен</b>\n"
-                    f"{texts.DIVIDER}\n\n"
-                    f"Активной подписки не было, поэтому бот создал новый бонусную подписку на <b>{bonus_days} дней</b>."
-                ),
-                reply_markup=kb.main_menu_kb(
-                    trial_available=await db.is_trial_available(referrer["id"]),
-                    has_active_sub=True,
-                    days_left=bonus_days,
-                ),
-            )
-        else:
-            await bot.send_message(
-                referrer["tg_id"],
-                (
-                    "⚠️ <b>Друг оплатил подписку</b>\n"
-                    f"{texts.DIVIDER}\n\n"
-                    f"Бонус <b>+{bonus_days} дней</b> не удалось начислить автоматически. Напишите в поддержку."
-                ),
-            )
-    except Exception:
-        logger.exception("Failed to notify referrer about bonus")
-
-
-async def _create_new_subscription(payment: dict, bonus_days: int) -> dict | None:
-    try:
-        await xui.set_inbound_remark(XUI_INBOUND_ID, INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to sync inbound remark before new payment fulfillment")
-
-    email = xui.build_client_email()
-    expire_days = payment["months"] * 30 + bonus_days
-    created = await xui.add_client(
-        inbound_id=XUI_INBOUND_ID,
-        email=email,
-        devices=payment["devices"],
-        expire_days=expire_days,
-    )
-    if not created or not created.get("subscription_url"):
-        return None
-
-    sub = await db.create_subscription(
-        user_id=payment["user_id"],
-        xui_client_id=created["client_id"],
-        inbound_id=XUI_INBOUND_ID,
-        devices=payment["devices"],
-        months=payment["months"],
-        vless_key=created.get("vless_key") or "",
-        days=expire_days,
-        subscription_url=created["subscription_url"],
-        subscription_id=created["subscription_id"],
-        email=created["email"],
-    )
-    return {
-        "subscription": sub,
-        "flow": "new",
-        "previous_devices": None,
-        "bonus_days": bonus_days,
-        "xui_created": created,
-    }
+        except Exception:
+            logger.exception("Failed to notify referrer %s", referrer["tg_id"])
 
 
 async def _renew_existing_subscription(payment: dict, bonus_days: int) -> dict | None:
@@ -313,12 +211,7 @@ async def _renew_existing_subscription(payment: dict, bonus_days: int) -> dict |
         )
         return await _create_new_subscription(payment, bonus_days)
 
-    try:
-        await xui.set_inbound_remark(target_sub["inbound_id"], INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to sync inbound remark before renewal")
-
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     current_exp = datetime.fromisoformat(target_sub["expires_at"])
     new_devices = payment["devices"]
     old_devices = target_sub["devices"]
@@ -397,7 +290,7 @@ async def _renew_existing_subscription(payment: dict, bonus_days: int) -> dict |
 async def _notify_success(bot: Bot, db_user: dict, payment: dict, result: dict) -> None:
     sub = result["subscription"]
     expires_at = datetime.fromisoformat(sub["expires_at"])
-    days_left = max(0, (expires_at - datetime.utcnow()).days)
+    days_left = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).days)
     bonus_note = ""
     if result["bonus_days"] > 0:
         bonus_note = (

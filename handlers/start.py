@@ -4,7 +4,7 @@ Handlers: start screen, main menu, help, and connection guides.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -29,7 +29,7 @@ async def _home_payload(db_user: dict, first_name: str) -> tuple[str, object]:
     if has_active_sub:
         best = max(active_subs, key=lambda item: item["expires_at"])
         expires_at = datetime.fromisoformat(best["expires_at"])
-        days_left = max(0, (expires_at - datetime.utcnow()).days)
+        days_left = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).days)
         text = texts.welcome_with_status(
             first_name,
             days_left,

@@ -4,7 +4,7 @@ Admin-only handlers: statistics, broadcast, user lookup, ban.
 import logging
 import asyncio
 import html
-from datetime import datetime
+from datetime import datetime, timezone
 import aiosqlite
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
@@ -19,6 +19,7 @@ import database as db
 import keyboards as kb
 from config import ADMIN_IDS, INBOUND_REMARK, PRICES, XUI_INBOUND_ID
 from services.xui import xui
+
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -81,29 +82,13 @@ async def adm_stats(call: CallbackQuery):
 
     users = await db.get_users_count()
     revenue = await db.get_revenue_stats()
+    stats = await db.get_admin_stats()
 
-    all_users = await db.get_all_users()
-    active_subs = 0
-    trial_users = 0
-    paid_users = 0
-    for u in all_users:
-        subs = await db.get_active_subscriptions(u["id"])
-        active_subs += len(subs)
-        if u.get("trial_used") and not await db.has_paid_before(u["id"]):
-            trial_users += 1
-        if await db.has_paid_before(u["id"]):
-            paid_users += 1
+    _now = datetime.now(timezone.utc).replace(tzinfo=None)
+    new_week = stats["new_week"]
+    new_day = stats["new_day"]
 
-    new_week = sum(
-        1 for u in all_users
-        if (datetime.utcnow() - datetime.fromisoformat(u["created_at"])).days <= 7
-    )
-    new_day = sum(
-        1 for u in all_users
-        if (datetime.utcnow() - datetime.fromisoformat(u["created_at"])).days < 1
-    )
-
-    conversion = f"{paid_users / users * 100:.1f}%" if users > 0 else "0%"
+    conversion = f"{stats['paid_users'] / users * 100:.1f}%" if users > 0 else "0%"
 
     text = (
         "📊 <b>Панель управления VpNLi</b>\n"
@@ -112,8 +97,8 @@ async def adm_stats(call: CallbackQuery):
         f"  Всего: <b>{users}</b>\n"
         f"  За сегодня: <b>+{new_day}</b> · за неделю: <b>+{new_week}</b>\n\n"
         "📡 <b>Подписки</b>\n"
-        f"  Активных сейчас: <b>{active_subs}</b>\n"
-        f"  Только триал: <b>{trial_users}</b>\n\n"
+        f"  Активных сейчас: <b>{stats['active_subs']}</b>\n"
+        f"  Только триал: <b>{stats['trial_users']}</b>\n\n"
         "💳 <b>Оплаты</b>\n"
         f"  Всего: <b>{revenue['total']} ₽</b> · <b>{revenue['count']}</b> шт.\n"
         f"  Конверсия: <b>{conversion}</b>\n"
@@ -504,7 +489,7 @@ async def adm_promo_menu(call: CallbackQuery):
         await call.answer("⛔", show_alert=True)
         return
     promos = await db.list_promocodes(limit=100)
-    active_count = sum(1 for p in promos if not p.get("expires_at") or p["expires_at"] > datetime.utcnow().isoformat())
+    active_count = sum(1 for p in promos if not p.get("expires_at") or p["expires_at"] > datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="➕ Создать", callback_data="adm_create_promo", style=ButtonStyle.SUCCESS),
@@ -540,7 +525,7 @@ async def adm_list_promos(call: CallbackQuery):
     for promo in promos[:15]:
         remaining = max(0, promo["max_activations"] - promo["used_count"])
         until = promo["expires_at"][:10] if promo["expires_at"] else "∞"
-        is_expired = promo["expires_at"] and promo["expires_at"] < datetime.utcnow().isoformat()
+        is_expired = promo["expires_at"] and promo["expires_at"] < datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         badge = "🔴" if is_expired or remaining == 0 else "🟢"
         lines.append(f"{badge} <b>{promo['code']}</b> · {_promo_discount_text(promo['discount_value'])} · {remaining}/{promo['max_activations']} · до {until}")
         builder.row(InlineKeyboardButton(text=f"{badge} {promo['code']}", callback_data=f"adm_promo_{promo['id']}"))
@@ -570,7 +555,7 @@ async def adm_open_promo(call: CallbackQuery):
         return
     until = promo["expires_at"][:10] if promo["expires_at"] else "∞"
     remaining = max(0, promo["max_activations"] - promo["used_count"])
-    is_expired = promo["expires_at"] and promo["expires_at"] < datetime.utcnow().isoformat()
+    is_expired = promo["expires_at"] and promo["expires_at"] < datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
     badge = "🔴 Истёк/исчерпан" if is_expired or remaining == 0 else "🟢 Активен"
     progress = promo["used_count"] / promo["max_activations"] if promo["max_activations"] > 0 else 0
     bar_filled = round(progress * 10)
@@ -878,7 +863,7 @@ async def _render_users_list(target: CallbackQuery, offset: int = 0) -> None:
     nav_row = []
     if safe_offset > 0:
         nav_row.append(
-            InlineKeyboardButton(text="⬅️", callback_data=f"adm_find_user_page_{prev_offset}")
+            InlineKeyboardButton(text="⬅️", callback_data=f"adm_find_user_page_{safe_offset - USER_LIST_PAGE_SIZE}")
         )
     nav_row.append(
         InlineKeyboardButton(text=f"📄 {page}/{pages}", callback_data="adm_find_user_page_0")
@@ -941,7 +926,7 @@ async def _user_card_text(user: dict) -> str:
     paid_before = await db.has_paid_before(user["id"])
 
     active = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for s in subs:
         if s["is_active"] and datetime.fromisoformat(s["expires_at"]) > now:
             active.append(s)
@@ -1134,17 +1119,33 @@ async def adm_deactivate_all_user_subscriptions(call: CallbackQuery):
         await call.answer("Активных подписок нет.", show_alert=True)
         return
 
+    if not await xui.login():
+        await call.answer("❌ Не удалось войти в XUI панель", show_alert=True)
+        return
+
     for sub in subs:
         if sub.get("xui_client_id"):
             try:
-                await xui.delete_client(sub["xui_client_id"], email=sub.get("email"))
+                for inbound in await xui.get_inbounds():
+                    settings = xui._parse_settings(inbound)
+                    if xui._find_client(settings, client_id=sub["xui_client_id"]):
+                        await xui._request(
+                            "POST",
+                            f"/panel/api/inbounds/{inbound['id']}/delClient/{sub['xui_client_id']}",
+                        )
             except Exception:
                 logger.exception("Failed to delete xui client %s", sub["xui_client_id"])
         clients = await db.get_active_vpn_clients_for_subscription(sub["id"])
         for client in clients:
             if client.get("xui_client_id"):
                 try:
-                    await xui.delete_client(client["xui_client_id"], email=client.get("email"))
+                    for inbound in await xui.get_inbounds():
+                        settings = xui._parse_settings(inbound)
+                        if xui._find_client(settings, client_id=client["xui_client_id"]):
+                            await xui._request(
+                                "POST",
+                                f"/panel/api/inbounds/{inbound['id']}/delClient/{client['xui_client_id']}",
+                            )
                 except Exception:
                     logger.exception("Failed to delete legacy xui client %s", client["xui_client_id"])
                 await db.deactivate_vpn_client(client["xui_client_id"])
@@ -1215,10 +1216,6 @@ async def adm_grant_subscription(call: CallbackQuery, bot: Bot):
         return
 
     await call.answer("Создаю подписку...")
-    try:
-        await xui.set_inbound_remark(XUI_INBOUND_ID, INBOUND_REMARK)
-    except Exception:
-        logger.exception("Failed to sync inbound remark before admin grant")
 
     created = await xui.add_client(
         inbound_id=XUI_INBOUND_ID,
@@ -1259,4 +1256,6 @@ async def adm_grant_subscription(call: CallbackQuery, bot: Bot):
 
     await call.answer("Подписка выдана ✅", show_alert=True)
     await _show_user_card(call, tg_id)
+
+
 USER_LIST_PAGE_SIZE = 20

@@ -4,7 +4,7 @@ Background scheduler tasks.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -28,7 +28,7 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
             for record in expiring:
                 try:
                     expires_at = datetime.fromisoformat(record["expires_at"])
-                    days_left = max(0, (expires_at - datetime.utcnow()).days)
+                    days_left = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).days)
                     if days_left != threshold:
                         continue
 

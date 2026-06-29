@@ -3,7 +3,7 @@ Inline keyboard builders for the bot.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote, quote_plus
 
 from aiogram.enums import ButtonStyle
@@ -267,9 +267,13 @@ def limit_violation_kb(sub_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def subs_list_kb(subs: list[dict]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    now = datetime.utcnow()
+    now = _utcnow()
     for sub in subs:
         expires_at = datetime.fromisoformat(sub["expires_at"])
         days_left = _remaining_days(expires_at, now)
@@ -295,7 +299,7 @@ def subs_list_kb(subs: list[dict]) -> InlineKeyboardMarkup:
 
 def renew_subscriptions_kb(subs: list[dict]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    now = datetime.utcnow()
+    now = _utcnow()
     for sub in subs:
         expires_at = datetime.fromisoformat(sub["expires_at"])
         days_left = _remaining_days(expires_at, now)

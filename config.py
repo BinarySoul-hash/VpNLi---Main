@@ -69,18 +69,18 @@ XUI_INBOUND_IDS: list[int] = _env_int_list("XUI_INBOUND_IDS", _env_int_list("XUI
 XUI_VERIFY_SSL: bool = _env_bool("XUI_VERIFY_SSL", True)
 XUI_PUBLIC_BASE_URL: str = os.getenv("XUI_PUBLIC_BASE_URL", "").rstrip("/")
 XUI_SUBSCRIPTION_URL_TEMPLATE: str = os.getenv("XUI_SUBSCRIPTION_URL_TEMPLATE", "").strip()
-XUI_SUB_PORT: int = int(os.getenv("XUI_SUB_PORT", "2096"))
-XUI_ONLINES_TIMEOUT_SECONDS: int = int(os.getenv("XUI_ONLINES_TIMEOUT_SECONDS", "90"))
-XUI_ONLINES_RETRIES: int = int(os.getenv("XUI_ONLINES_RETRIES", "2"))
-XUI_REQUEST_RETRIES: int = int(os.getenv("XUI_REQUEST_RETRIES", "3"))
-XUI_INBOUNDS_TIMEOUT_SECONDS: int = int(os.getenv("XUI_INBOUNDS_TIMEOUT_SECONDS", "45"))
-XUI_CLIENT_IPS_TIMEOUT_SECONDS: int = int(os.getenv("XUI_CLIENT_IPS_TIMEOUT_SECONDS", "25"))
+XUI_SUB_PORT: int = _env_int("XUI_SUB_PORT", 2096)
+XUI_ONLINES_TIMEOUT_SECONDS: int = _env_int("XUI_ONLINES_TIMEOUT_SECONDS", 90)
+XUI_ONLINES_RETRIES: int = _env_int("XUI_ONLINES_RETRIES", 2)
+XUI_REQUEST_RETRIES: int = _env_int("XUI_REQUEST_RETRIES", 3)
+XUI_INBOUNDS_TIMEOUT_SECONDS: int = _env_int("XUI_INBOUNDS_TIMEOUT_SECONDS", 45)
+XUI_CLIENT_IPS_TIMEOUT_SECONDS: int = _env_int("XUI_CLIENT_IPS_TIMEOUT_SECONDS", 25)
 
 # ── Bot settings ──────────────────────────────────────────────────────────────
 WEBHOOK_HOST: str = os.getenv("WEBHOOK_HOST", "")
 WEBHOOK_PATH: str = "/webhook"
 WEBAPP_HOST: str = "0.0.0.0"
-WEBAPP_PORT: int = int(os.getenv("PORT", "8080"))
+WEBAPP_PORT: int = _env_int("PORT", 8080)
 
 # ── Inbound Settings ──────────────────────────────────────────────────────────
 # Красивое имя для всех ссылок в инбаунде
@@ -90,7 +90,7 @@ INBOUND_REMARK: str = os.getenv("INBOUND_REMARK", "VpNLi 🔷 | 🇳🇱 Amsterd
 # If 3X-UI `limitIp` is not enforced reliably (varies by setup/version),
 # the bot can enforce it by temporarily disabling the client when over-limit.
 HARD_IP_LIMIT_ENFORCEMENT: bool = _env_bool("HARD_IP_LIMIT_ENFORCEMENT", True)
-HARD_IP_LIMIT_COOLDOWN_SECONDS: int = int(os.getenv("HARD_IP_LIMIT_COOLDOWN_SECONDS", "60"))
+HARD_IP_LIMIT_COOLDOWN_SECONDS: int = _env_int("HARD_IP_LIMIT_COOLDOWN_SECONDS", 60)
 
 # ── Referral ──────────────────────────────────────────────────────────────────
 # Бонусные дни начисляются обоим после успешной оплаты рефералом.
@@ -102,7 +102,7 @@ REFERRAL_BONUS_DAYS_BY_MONTHS: dict[int, int] = {
 # ── Trial ─────────────────────────────────────────────────────────────────────
 TRIAL_DAYS: int = 3
 TRIAL_TRAFFIC_GB: int = 15
-TRIAL_LOCK_STALE_SECONDS: int = int(os.getenv("TRIAL_LOCK_STALE_SECONDS", "900"))
+TRIAL_LOCK_STALE_SECONDS: int = _env_int("TRIAL_LOCK_STALE_SECONDS", 900)
 
 # ── Pricing (RUB) ─────────────────────────────────────────────────────────────
 # Format: {devices: {months: price}}
@@ -128,7 +128,7 @@ PERIOD_DISCOUNTS: dict = {
 # ── DB ────────────────────────────────────────────────────────────────────────
 DB_PATH: str = os.getenv("DB_PATH", "data/vpn_bot.db")
 DB_BACKUP_DIR: str = os.getenv("DB_BACKUP_DIR", "data/backups")
-DB_BACKUP_KEEP: int = int(os.getenv("DB_BACKUP_KEEP", "10"))
+DB_BACKUP_KEEP: int = _env_int("DB_BACKUP_KEEP", 10)
 
 # ── Offer text ────────────────────────────────────────────────────────────────
 OFFER_PDF_PATH: str = os.getenv(

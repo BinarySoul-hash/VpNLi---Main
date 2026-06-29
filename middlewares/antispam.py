@@ -12,6 +12,9 @@ from aiogram.types import CallbackQuery, Message, TelegramObject
 
 
 class AntiSpamMiddleware(BaseMiddleware):
+    _MAX_CACHE_SIZE = 5000
+    _CLEANUP_INTERVAL = 300
+
     def __init__(
         self,
         *,
@@ -27,6 +30,29 @@ class AntiSpamMiddleware(BaseMiddleware):
         self._last_event_at: Dict[Tuple[int, str], float] = {}
         self._events: Dict[Tuple[int, str], Deque[float]] = {}
         self._last_warn_at: Dict[int, float] = {}
+        self._last_cleanup_at: float = 0.0
+
+    def _cleanup_if_needed(self) -> None:
+        now = time.monotonic()
+        if now - self._last_cleanup_at < self._CLEANUP_INTERVAL:
+            return
+        self._last_cleanup_at = now
+        if len(self._last_event_at) <= self._MAX_CACHE_SIZE:
+            return
+        stale_threshold = now - self.burst_window_seconds * 3
+        stale_keys = [
+            key for key, ts in self._last_event_at.items()
+            if ts < stale_threshold
+        ]
+        for key in stale_keys:
+            self._last_event_at.pop(key, None)
+            self._events.pop(key, None)
+        stale_warn = [
+            uid for uid, ts in self._last_warn_at.items()
+            if ts < stale_threshold
+        ]
+        for uid in stale_warn:
+            self._last_warn_at.pop(uid, None)
 
     def _drop_old(self, dq: Deque[float], now: float) -> None:
         threshold = now - self.burst_window_seconds
@@ -54,6 +80,7 @@ class AntiSpamMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         now = time.monotonic()
+        self._cleanup_if_needed()
         tg_id = event.from_user.id
         event_type = "callback" if isinstance(event, CallbackQuery) else "message"
         min_interval = (
