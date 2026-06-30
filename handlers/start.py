@@ -29,7 +29,8 @@ async def _home_payload(db_user: dict, first_name: str) -> tuple[str, object]:
     if has_active_sub:
         best = max(active_subs, key=lambda item: item["expires_at"])
         expires_at = datetime.fromisoformat(best["expires_at"])
-        days_left = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).days)
+        remaining_seconds = max(0, (expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds())
+        days_left = int((remaining_seconds + 86399) // 86400)
         text = texts.welcome_with_status(
             first_name,
             days_left,

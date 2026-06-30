@@ -15,7 +15,7 @@ from config import (
 )
 
 CHANNEL_URL = "https://t.me/VpNLi_Hab"
-SUPPORT_HANDLE = "@coketRokets"
+SUPPORT_HANDLES = ("@coketRokets", "@mateoCHill")
 DIVIDER = " ✦ VpNLi ✦ "
 
 
@@ -423,21 +423,21 @@ def howto_platform(platform: str) -> str:
     guides = {
         "android": (
             "🤖 <b>Android</b>\n"
-            "1. Установите <b>v2raytun</b>\n"
+            "1. Установите <b>Incy</b>\n"
             "2. Скопируйте ссылку подписки из бота\n"
             "3. Откройте приложение и нажмите <b>+</b>\n"
             "4. Выберите импорт из буфера обмена\n"
             "5. Нажмите ▶️ и подключайтесь\n\n"
-            "📥 <a href='https://play.google.com/store/apps/details?id=com.v2raytun.android'>Скачать v2raytun</a>"
+            "📥 <a href='https://play.google.com/store/apps/details?id=llc.itdev.incy'>Скачать Incy</a>"
         ),
         "ios": (
             "🍎 <b>iPhone / iPad</b>\n"
-            "1. Установите <b>Streisand</b>\n"
+            "1. Установите <b>Incy</b>\n"
             "2. Скопируйте ссылку подписки из бота\n"
             "3. Откройте приложение и нажмите <b>+</b>\n"
             "4. Выберите импорт из буфера\n"
             "5. Подтвердите создание VPN-конфигурации\n\n"
-            "📥 <a href='https://apps.apple.com/app/streisand/id6450534064'>Скачать Streisand</a>"
+            "📥 <a href='https://apps.apple.com/us/app/incy/id6756943388'>Скачать Incy</a>"
         ),
         "windows": (
             "🪟 <b>Windows</b>\n"
@@ -483,7 +483,7 @@ HELP_TEXT = (
 
 SUPPORT_TEXT = (
     "💬 <b>Поддержка VpNLi</b>\n\n"
-    f"Напишите: <b>{SUPPORT_HANDLE}</b>\n\n"
+    f"Напишите: <b>{' / '.join(SUPPORT_HANDLES)}</b>\n\n"
     "Чтобы помочь быстрее, сразу укажите:\n"
     "• вашу платформу\n"
     "• что именно не работает\n"
@@ -529,7 +529,7 @@ PRIVACY_POLICY_TEXT = (
     "8. <b>Права пользователя</b>\n"
     "Вы можете запросить актуализацию, ограничение обработки или удаление данных, если это не противоречит обязательным требованиям закона и учёта платежей.\n\n"
     "9. <b>Контакты</b>\n"
-    f"По вопросам обработки данных: <b>{SUPPORT_HANDLE}</b>.\n\n"
+    f"По вопросам обработки данных: <b>{' / '.join(SUPPORT_HANDLES)}</b>.\n\n"
     "10. <b>Изменения политики</b>\n"
     "Актуальная редакция политики публикуется в разделе «Документы» этого бота."
 )
@@ -559,7 +559,7 @@ PUBLIC_OFFER_TEXT = (
     "9. <b>Срок действия и изменение условий</b>\n"
     "Оферта действует бессрочно до её отзыва или замены новой редакцией. Актуальная версия всегда доступна в разделе «Документы».\n\n"
     "10. <b>Контакты поддержки</b>\n"
-    f"По всем вопросам: <b>{SUPPORT_HANDLE}</b>."
+    f"По всем вопросам: <b>{' / '.join(SUPPORT_HANDLES)}</b>."
 )
 
 

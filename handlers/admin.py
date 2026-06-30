@@ -17,7 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import database as db
 import keyboards as kb
-from config import ADMIN_IDS, INBOUND_REMARK, PRICES, XUI_INBOUND_ID
+from config import ADMIN_IDS, INBOUND_REMARK, PRICES, XUI_INBOUND_ID, DB_PATH
 from services.xui import xui
 
 
@@ -27,6 +27,23 @@ router = Router()
 
 def is_admin(tg_id: int) -> bool:
     return tg_id in ADMIN_IDS
+
+
+def _sync_trial_check(user_id: int) -> bool:
+    """Synchronous trial check for broadcast (avoids async overhead per user)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute(
+            "SELECT trial_used FROM users WHERE id = ?", (user_id,)
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return False
+        return int(row[0] or 0) == 0
+    except Exception:
+        return False
 
 
 class AdminState(StatesGroup):
@@ -252,7 +269,12 @@ async def _show_broadcast_preview(message: Message, state: FSMContext, buttons: 
     if buttons:
         preview += f"🔘 <b>Кнопки</b> ({btn_count}/8):\n"
         for i, btn in enumerate(buttons, 1):
-            kind = "🔗" if btn.get("type") == "url" else "📌"
+            if btn.get("type") == "smart":
+                kind = "🎯"
+            elif btn.get("type") == "url":
+                kind = "🔗"
+            else:
+                kind = "📌"
             preview += f"  {i}. {kind} {btn['label']}\n"
     else:
         preview += "🔘 Без кнопок\n"
@@ -261,11 +283,14 @@ async def _show_broadcast_preview(message: Message, state: FSMContext, buttons: 
     for btn in buttons:
         if btn.get("type") == "url":
             kb_builder.row(InlineKeyboardButton(text=f"🔗 {btn['label']}", url=btn["url"]))
+        elif btn.get("type") == "smart":
+            kb_builder.row(InlineKeyboardButton(text=f"🎯 {btn['label']}", callback_data="broadcast_ref"))
         else:
             kb_builder.row(InlineKeyboardButton(text=f"📌 {btn['label']}", callback_data=btn["callback"]))
 
     if btn_count < 8:
         kb_builder.row(InlineKeyboardButton(text="➕ Добавить кнопку", callback_data="broadcast_add_btn", style=ButtonStyle.PRIMARY))
+    kb_builder.row(InlineKeyboardButton(text="📚 Справка по кнопкам", callback_data="broadcast_ref"))
     kb_builder.row(InlineKeyboardButton(text="🚀 Отправить рассылку", callback_data="broadcast_send_now", style=ButtonStyle.SUCCESS))
     kb_builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="adm_back", style=ButtonStyle.DANGER))
 
@@ -302,6 +327,47 @@ async def adm_broadcast_cancel_add(call: CallbackQuery, state: FSMContext):
     await state.set_state(AdminState.waiting_broadcast_text)
 
 
+@router.callback_query(F.data == "broadcast_ref")
+async def adm_broadcast_ref(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    ref_text = (
+        "📚 <b>Справка по кнопкам рассылки</b>\n\n"
+        "📌 <b>Callback-data (нажатие → действие в боте):</b>\n\n"
+        "• <code>trial</code> — Получить 3 дня бесплатно\n"
+        "• <code>buy</code> — Купить / продлить VPN\n"
+        "• <code>my_subs</code> — Мои подписки\n"
+        "• <code>main_menu</code> — В главное меню\n"
+        "• <code>install</code> — Как подключиться\n"
+        "• <code>support</code> — Поддержка\n"
+        "• <code>profile</code> — Мой профиль\n"
+        "• <code>docs</code> — Документы\n\n"
+        "🎯 <b>Умная кнопка</b> — вводите свой текст,\n"
+        "а бот сам подменяет callback:\n"
+        "• Нет подписки → <code>trial</code>\n"
+        "• Есть подписка → <code>buy</code>"
+    )
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+    kb_builder = InlineKeyboardBuilder()
+    kb_builder.row(InlineKeyboardButton(text="◀️ Назад к рассылке", callback_data="broadcast_back_to_preview"))
+    await call.message.edit_text(ref_text, reply_markup=kb_builder.as_markup())
+
+
+@router.callback_query(F.data == "broadcast_back_to_preview")
+async def adm_broadcast_back_to_preview(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    data = await state.get_data()
+    buttons = data.get("broadcast_buttons", [])
+    await _show_broadcast_preview(call.message, state, buttons)
+    await state.set_state(AdminState.waiting_broadcast_text)
+
+
 @router.message(AdminState.waiting_broadcast_btn_label)
 async def adm_broadcast_btn_label_received(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -321,6 +387,7 @@ async def adm_broadcast_btn_label_received(message: Message, state: FSMContext):
         InlineKeyboardButton(text="📌 Callback-кнопка", callback_data="broadcast_btn_type_callback"),
         InlineKeyboardButton(text="🔗 URL-кнопка", callback_data="broadcast_btn_type_url"),
     )
+    kb_builder.row(InlineKeyboardButton(text="🎯 Умная кнопка", callback_data="broadcast_btn_type_smart"))
     kb_builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel_add"))
     await message.answer(
         f"Текст кнопки: <b>{html.escape(label)}</b>\n\n"
@@ -362,6 +429,24 @@ async def adm_broadcast_btn_type_url(call: CallbackQuery, state: FSMContext):
         ).as_markup(),
     )
     await state.update_data(pending_btn_type="url")
+
+
+@router.callback_query(F.data == "broadcast_btn_type_smart")
+async def adm_broadcast_btn_type_smart(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await call.answer()
+    data = await state.get_data()
+    btn_label = data.get("pending_btn_label", "")
+    buttons = data.get("broadcast_buttons", [])
+    buttons.append({
+        "type": "smart",
+        "label": btn_label,
+    })
+    await state.update_data(broadcast_buttons=buttons, pending_btn_label=None, pending_btn_type=None)
+    await _show_broadcast_preview(call.message, state, buttons)
+    await state.set_state(AdminState.waiting_broadcast_text)
 
 
 @router.message(AdminState.waiting_broadcast_btn_action)
@@ -409,15 +494,22 @@ async def adm_broadcast_send_now(call: CallbackQuery, state: FSMContext, bot: Bo
         await call.answer("Текст рассылки пуст.", show_alert=True)
         return
 
-    reply_markup = None
-    if buttons:
+    has_smart = any(btn.get("type") == "smart" for btn in buttons)
+
+    def _build_markup(user_id: int | None = None) -> InlineKeyboardMarkup | None:
+        if not buttons:
+            return None
         builder = InlineKeyboardBuilder()
         for btn in buttons:
             if btn.get("type") == "url":
                 builder.row(InlineKeyboardButton(text=btn["label"], url=btn["url"]))
+            elif btn.get("type") == "smart" and user_id is not None:
+                trial_available = _sync_trial_check(user_id)
+                callback = "trial" if trial_available else "buy"
+                builder.row(InlineKeyboardButton(text=btn["label"], callback_data=callback))
             else:
                 builder.row(InlineKeyboardButton(text=btn["label"], callback_data=btn["callback"]))
-        reply_markup = builder.as_markup()
+        return builder.as_markup()
 
     users = await db.get_all_users()
     sent = 0
@@ -427,11 +519,12 @@ async def adm_broadcast_send_now(call: CallbackQuery, state: FSMContext, bot: Bo
 
     for i, user in enumerate(users):
         try:
+            markup = _build_markup(user["id"]) if has_smart else _build_markup()
             await bot.copy_message(
                 chat_id=user["tg_id"],
                 from_chat_id=source_chat_id,
                 message_id=source_message_id,
-                reply_markup=reply_markup,
+                reply_markup=markup,
             )
             sent += 1
         except Exception:
@@ -1126,26 +1219,14 @@ async def adm_deactivate_all_user_subscriptions(call: CallbackQuery):
     for sub in subs:
         if sub.get("xui_client_id"):
             try:
-                for inbound in await xui.get_inbounds():
-                    settings = xui._parse_settings(inbound)
-                    if xui._find_client(settings, client_id=sub["xui_client_id"]):
-                        await xui._request(
-                            "POST",
-                            f"/panel/api/inbounds/{inbound['id']}/delClient/{sub['xui_client_id']}",
-                        )
+                await xui.delete_client(sub["xui_client_id"], email=sub.get("email"))
             except Exception:
                 logger.exception("Failed to delete xui client %s", sub["xui_client_id"])
         clients = await db.get_active_vpn_clients_for_subscription(sub["id"])
         for client in clients:
             if client.get("xui_client_id"):
                 try:
-                    for inbound in await xui.get_inbounds():
-                        settings = xui._parse_settings(inbound)
-                        if xui._find_client(settings, client_id=client["xui_client_id"]):
-                            await xui._request(
-                                "POST",
-                                f"/panel/api/inbounds/{inbound['id']}/delClient/{client['xui_client_id']}",
-                            )
+                    await xui.delete_client(client["xui_client_id"], email=client.get("email"))
                 except Exception:
                     logger.exception("Failed to delete legacy xui client %s", client["xui_client_id"])
                 await db.deactivate_vpn_client(client["xui_client_id"])
